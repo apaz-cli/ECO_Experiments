@@ -47,6 +47,7 @@ eco = [
     "torchao",
     "aim",
     "tqdm",
+    "pytest",
 ]
 
 [tool.setuptools.dynamic]

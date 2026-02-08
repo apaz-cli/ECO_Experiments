@@ -1,6 +1,13 @@
 #!/bin/bash
 
 set -ex
+
+# Activate venv if present (needed when invoked via shebang or subprocess)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/.venv/bin/activate" ]; then
+    source "$SCRIPT_DIR/.venv/bin/activate"
+fi
+
 CONFIG_FILE="$1"
 shift # Passthrough the rest
 

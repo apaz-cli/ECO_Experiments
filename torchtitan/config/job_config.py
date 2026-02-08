@@ -997,13 +997,35 @@ class Debug:
 @dataclass
 class ECO:
     enabled: bool = False
-    """Whether to enable ECO (Error-Compensating Optimizer) for quantized training without master weights."""
+    """
+    Whether to enable ECO (Error-Compensating Optimizer) for quantized training without master weights.
+    
+    ECO stores parameters in FP8 format and optimizer states in the specified optim_state_dtype.
+    This eliminates the need for full-precision master weights, reducing memory by ~60%.
+    
+    Requires using optimizer.name="ECOAdamW" which supports decoupled parameter
+    and optimizer state dtypes.
+    """
 
     heuristic_log_freq: int = 100
     """How often (in steps) to log heuristic validation metrics (e_t vs e_{t+1} comparison)."""
 
     stochastic_rounding: bool = False
     """Whether to use stochastic rounding instead of round-to-nearest for weight quantization."""
+
+    optim_state_dtype: str = "fp32"
+    """
+    Dtype for optimizer states (momentum, variance).
+    Options: "fp32", "bf16", "fp16". Default is "fp32" to match the paper
+    (9 bytes/param = FP8 weight + FP32 m + FP32 v).
+    """
+
+    optim_compute_dtype: str = "fp32"
+    """
+    Dtype for computation in optimizer step (gradients, parameter updates).
+    Options: "fp32", "bf16", "fp16". Default is "fp32" so the error
+    e = θ̃ − Q(θ̃) is computed without catastrophic cancellation.
+    """
 
 
 @dataclass

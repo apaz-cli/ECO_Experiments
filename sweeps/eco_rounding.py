@@ -1,6 +1,7 @@
 #!/tmp/eco/run_sweep.py
-ECO_OFF = ["--eco.enabled=false", "--model.converters", ""]
-ECO_ON = ["--eco.enabled=true", "--model.converters", "quantize.linear.float8,eco"]
+BASE_CONFIG = "configs/debug/baseline.toml"
+ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
+ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
 
 OPTIONS = {
     "eco_enabled": {
@@ -11,8 +12,8 @@ OPTIONS = {
     "stochastic_rounding": {
         "values": [False, True],
         "flags": {
-            False: ["--eco.stochastic_rounding=false"],
-            True: ["--eco.stochastic_rounding=true"],
+            False: ["--eco.no-stochastic-rounding"],
+            True: ["--eco.stochastic-rounding"],
         },
         "name": "sr",
     },

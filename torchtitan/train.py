@@ -276,8 +276,10 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         )
 
         # build optimizer after applying parallelisms to the model
+        # Pass eco_config if ECOAdamW is requested
+        eco_config = job_config.eco if job_config.eco.enabled else None
         self.optimizers = self.train_spec.build_optimizers_fn(
-            self.model_parts, job_config.optimizer, parallel_dims, self.ft_manager
+            self.model_parts, job_config.optimizer, parallel_dims, self.ft_manager, eco_config
         )
         self.lr_schedulers = self.train_spec.build_lr_schedulers_fn(
             self.optimizers, job_config.lr_scheduler, job_config.training.steps
@@ -287,7 +289,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         # where it issues a single all-reduce for all parameters at once for better performance
         self.optimizers.register_step_post_hook(
             lambda *args, **kwargs: model_converters.post_optimizer_hook(
-                self.model_parts, self.optimizers
+                self.model_parts
             )
         )
         self.metrics_processor.optimizers = self.optimizers
@@ -646,8 +648,10 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
             "n_tokens_seen": global_ntokens_seen,
             "lr": lr,
         }
-        # Collect extra metrics from model converters (e.g. ECO heuristic metrics)
-        extra_metrics.update(self.model_converters.get_extra_metrics())
+        # Collect ECO heuristic metrics from optimizers (if ECOAdamW)
+        for opt in self.optimizers.optimizers:
+            if hasattr(opt, "get_eco_metrics"):
+                extra_metrics.update(opt.get_eco_metrics())
         self.metrics_processor.log(
             self.step,
             global_avg_loss,

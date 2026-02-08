@@ -9,9 +9,6 @@ from importlib.metadata import version
 # Import to register quantization modules.
 import torchtitan.components.quantization  # noqa: F401
 
-# Import to register ECO model converter.
-import torchtitan.components.eco  # noqa: F401
-
 try:
     __version__ = version("torchtitan")
 except Exception as e:

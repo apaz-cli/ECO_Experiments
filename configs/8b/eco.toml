@@ -22,12 +22,9 @@ name = "llama3"
 flavor = "8B"
 # Llama tokenizer (vocab=128256)
 hf_assets_path = "./assets/hf/Llama-3.1-8B"
-# Alternative: T5 tokenizer (uncomment, but note 8B flavor uses Llama vocab_size)
-# hf_assets_path = "./assets/tokenizers/t5-base"
-converters = ["quantize.linear.float8", "eco"]
 
 [optimizer]
-name = "AdamW"
+name = "ECOAdamW"
 lr = 3e-4
 beta1 = 0.9
 beta2 = 0.98
@@ -66,11 +63,6 @@ selective_ac_option = "op"
 [compile]
 enable = false
 components = ["model", "loss"]
-
-[quantize.linear.float8]
-enable_fsdp_float8_all_gather = false
-precompute_float8_dynamic_scale_for_fsdp = false
-filter_fqns = ["output"]
 
 [eco]
 enabled = true

@@ -1,6 +1,7 @@
 #!/tmp/eco/run_sweep.py
-ECO_OFF = ["--eco.enabled=false", "--model.converters", ""]
-ECO_ON = ["--eco.enabled=true", "--model.converters", "quantize.linear.float8,eco"]
+BASE_CONFIG = "configs/debug/baseline.toml"
+ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
+ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
 
 OPTIONS = {
     "eco_enabled": {

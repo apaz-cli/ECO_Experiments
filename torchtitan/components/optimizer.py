@@ -21,13 +21,15 @@ from torch.distributed.tensor import Replicate
 from torch.optim import Optimizer
 
 from torchtitan.components.ft import FTManager, has_torchft
-from torchtitan.config import Optimizer as OptimizerConfig
+from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.config import JobConfig, Optimizer as OptimizerConfig
 from torchtitan.distributed import ParallelDims
 
 __all__ = [
     "OptimizersContainer",
     "build_optimizers",
     "build_optimizers_with_moe_load_balancing",
+    "ECOAdamW",
 ]
 
 
@@ -255,6 +257,7 @@ def build_optimizers(
     optimizer_config: OptimizerConfig,
     parallel_dims: ParallelDims,
     ft_manager: FTManager | None = None,
+    eco_config=None,
 ) -> OptimizersContainer:
     """Create a OptimizersContainer for the given model parts and job config.
 
@@ -273,6 +276,7 @@ def build_optimizers(
         model_parts (List[nn.Module]): List of model parts to be optimized.
         optimizer_config (OptimizerConfig): Optimizer config containing the optimizer name and parameters.
         parallel_dims (ParallelDims): Parallel dimensions for the model.
+        eco_config: Optional ECO config for ECOAdamW optimizer dtype settings.
     """
     optim_in_bwd = optimizer_config.early_step_in_backward
     if optim_in_bwd:
@@ -314,10 +318,33 @@ def build_optimizers(
     optimizer_classes = {
         "Adam": torch.optim.Adam,
         "AdamW": torch.optim.AdamW,
+        "ECOAdamW": ECOAdamW,
     }
     if name not in optimizer_classes:
         raise NotImplementedError(f"Optimizer {name} not added.")
     optimizer_cls = optimizer_classes[name]
+    
+    # ECOAdamW handles dtype internally, remove fused/foreach flags
+    if name == "ECOAdamW":
+        optimizer_kwargs.pop("fused", None)
+        optimizer_kwargs.pop("foreach", None)
+
+        # Add dtype configuration from eco_config if available
+        if eco_config is not None:
+            dtype_map = {
+                "fp32": torch.float32,
+                "bf16": torch.bfloat16,
+                "fp16": torch.float16,
+            }
+            optimizer_kwargs["optim_state_dtype"] = dtype_map.get(
+                eco_config.optim_state_dtype.lower(), torch.float32
+            )
+            optimizer_kwargs["optim_compute_dtype"] = dtype_map.get(
+                eco_config.optim_compute_dtype.lower(), torch.float32
+            )
+            optimizer_kwargs["eco_enabled"] = eco_config.enabled
+            optimizer_kwargs["stochastic_rounding"] = eco_config.stochastic_rounding
+            optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
 
     if optim_in_bwd:
         return OptimizersInBackwardContainer(
@@ -341,12 +368,14 @@ def build_optimizers_with_moe_load_balancing(
     optimizer_config: OptimizerConfig,
     parallel_dims: ParallelDims,
     ft_manager: FTManager | None = None,
+    eco_config=None,
 ) -> OptimizersContainer:
     optimizers = build_optimizers(
         model_parts=model_parts,
         optimizer_config=optimizer_config,
         parallel_dims=parallel_dims,
         ft_manager=ft_manager,
+        eco_config=eco_config,
     )
 
     def _should_register_moe_balancing_hook(model_parts: list[nn.Module]) -> bool:

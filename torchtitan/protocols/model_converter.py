@@ -3,11 +3,10 @@
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
-from typing import Any, Dict, List, Protocol, Union
+from typing import Dict, List, Protocol, Union
 
 import torch.nn as nn
 
-from torchtitan.components.optimizer import OptimizersContainer
 from torchtitan.config import JobConfig
 from torchtitan.distributed import ParallelDims
 from torchtitan.tools.logging import logger
@@ -32,15 +31,9 @@ class ModelConverter(Protocol):
     def post_optimizer_hook(
         self,
         model: Union[nn.Module, List[nn.Module]],
-        optimizers: OptimizersContainer | None = None,
+        **kwargs,
     ):
-        """Post-optimizer (optional) hook (e.g. compute weights statistics).
-
-        Args:
-            model: The model or list of model parts.
-            optimizers: The optimizers container, provided so converters like ECO
-                can access optimizer state (e.g. momentum buffers).
-        """
+        """Post-optimizer (optional) hook (e.g. compute weights statistics)."""
         ...
 
 
@@ -86,18 +79,10 @@ class ModelConvertersContainer(ModelConverter):
     def post_optimizer_hook(
         self,
         model: Union[nn.Module, List[nn.Module]],
-        optimizers: OptimizersContainer | None = None,
+        **kwargs,
     ):
         for mh in self.converters:
-            mh.post_optimizer_hook(model, optimizers=optimizers)
-
-    def get_extra_metrics(self) -> Dict[str, Any]:
-        """Collect extra metrics from all converters that provide them."""
-        metrics: Dict[str, Any] = {}
-        for mh in self.converters:
-            if hasattr(mh, "get_extra_metrics"):
-                metrics.update(mh.get_extra_metrics())
-        return metrics
+            mh.post_optimizer_hook(model, **kwargs)
 
 
 def build_model_converters(
