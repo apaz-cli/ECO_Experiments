@@ -1,0 +1,76 @@
+#!/tmp/eco/run_config.sh
+
+# Debug config for ECO validation. Quick smoke test on 1 GPU.
+
+[job]
+dump_folder = "./outputs/debug_eco"
+description = "Debug ECO validation"
+
+[profiling]
+enable_profiling = false
+
+[metrics]
+log_freq = 1
+enable_tensorboard = false
+enable_aim = true
+
+[model]
+name = "llama3"
+flavor = "debugmodel"
+hf_assets_path = "./tests/assets/tokenizer"
+# For scaling law experiments, use T5 tokenizer instead:
+# hf_assets_path = "./assets/tokenizers/t5-base"
+converters = ["quantize.linear.float8", "eco"]
+
+[optimizer]
+name = "AdamW"
+lr = 8e-4
+beta1 = 0.9
+beta2 = 0.98
+eps = 1e-9
+
+[lr_scheduler]
+warmup_steps = 2
+decay_ratio = 0.8
+decay_type = "linear"
+min_lr_factor = 0.1
+
+[training]
+local_batch_size = 8
+seq_len = 2048
+max_norm = 1.0
+steps = 20
+dataset = "c4_test"
+
+[parallelism]
+data_parallel_replicate_degree = 1
+data_parallel_shard_degree = -1
+tensor_parallel_degree = 1
+pipeline_parallel_degree = 1
+
+[checkpoint]
+enable = false
+
+[activation_checkpoint]
+mode = "selective"
+selective_ac_option = "2"
+
+[compile]
+enable = false
+components = ["model", "loss"]
+
+[quantize.linear.float8]
+enable_fsdp_float8_all_gather = false
+precompute_float8_dynamic_scale_for_fsdp = false
+filter_fqns = ["output"]
+# Set emulate = true for GPUs without native FP8 (pre-SM89, e.g. A100).
+# SM89+ (4070+, H100, 5090) have native FP8 support.
+# emulate = true
+
+[eco]
+enabled = true
+heuristic_log_freq = 5
+stochastic_rounding = false
+
+[validation]
+enable = false

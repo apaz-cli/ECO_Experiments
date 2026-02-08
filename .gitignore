@@ -18,6 +18,7 @@ torchtitan/datasets/**/*.model
 # hf assets
 assets/hf/*
 assets/tokenizer/*
+assets/tokenizers/*
 torchtitan/experiments/flux/assets/*
 
 # temp files
@@ -45,3 +46,6 @@ Sessionx.vim
 
 # Vibe coding
 .claude
+
+.aim/**
+.venv/**

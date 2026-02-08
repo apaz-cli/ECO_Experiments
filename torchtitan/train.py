@@ -152,7 +152,8 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
             model = self.train_spec.model_cls(model_args)
 
         # Build the collection of model converters. No-op if `model.converters` empty
-        model_converters = build_model_converters(job_config, parallel_dims)
+        self.model_converters = build_model_converters(job_config, parallel_dims)
+        model_converters = self.model_converters
         model_converters.convert(model)
 
         # metrics logging
@@ -286,7 +287,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         # where it issues a single all-reduce for all parameters at once for better performance
         self.optimizers.register_step_post_hook(
             lambda *args, **kwargs: model_converters.post_optimizer_hook(
-                self.model_parts
+                self.model_parts, self.optimizers
             )
         )
         self.metrics_processor.optimizers = self.optimizers
@@ -645,6 +646,8 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
             "n_tokens_seen": global_ntokens_seen,
             "lr": lr,
         }
+        # Collect extra metrics from model converters (e.g. ECO heuristic metrics)
+        extra_metrics.update(self.model_converters.get_extra_metrics())
         self.metrics_processor.log(
             self.step,
             global_avg_loss,

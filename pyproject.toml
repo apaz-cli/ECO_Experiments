@@ -43,6 +43,11 @@ dev = [
     "tomli_w", # test_job_config
     "expecttest", # test_tokenizer
 ]
+eco = [
+    "torchao",
+    "aim",
+    "tqdm",
+]
 
 [tool.setuptools.dynamic]
 version = {file = "assets/version.txt"}

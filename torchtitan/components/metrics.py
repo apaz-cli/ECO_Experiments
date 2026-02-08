@@ -172,6 +172,76 @@ class WandBLogger(BaseLogger):
             self.wandb.finish()
 
 
+class AimLogger(BaseLogger):
+    """Logger implementation for Aim."""
+
+    def __init__(
+        self,
+        log_dir: str,
+        job_config: JobConfig,
+        tag: str | None = None,
+        run_hash: str | None = None,
+    ):
+        # Import aim here to avoid startup import
+        from aim import Run
+        import subprocess
+
+        self.tag = tag
+
+        # Use a shared Aim repository for all runs (not per-timestamp)
+        aim_repo = os.getenv("AIM_REPO", None)
+        if aim_repo is None:
+            aim_repo = ".aim"
+
+        os.makedirs(aim_repo, exist_ok=True)
+
+        # Check if Aim repository needs initialization
+        needs_init = not os.path.exists(os.path.join(aim_repo, "meta"))
+
+        if needs_init:
+            logger.info(f"Initializing Aim repository at {aim_repo}")
+            try:
+                subprocess.run(
+                    ["aim", "init", "--repo", aim_repo, "--yes"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to initialize Aim repository: {e.stderr}")
+                raise
+
+        # Initialize Aim run - resume if run_hash is provided
+        if run_hash:
+            logger.info(f"Resuming Aim run with hash: {run_hash}")
+            self.run = Run(
+                run_hash=run_hash,
+                repo=aim_repo,
+            )
+        else:
+            logger.info("Starting new Aim run")
+            self.run = Run(
+                repo=aim_repo,
+                experiment=os.getenv("AIM_EXPERIMENT", job_config.job.description),
+            )
+
+            if job_config.job.run_name:
+                self.run.name = job_config.job.run_name
+
+            # Track hyperparameters (only for new runs)
+            self.run["hparams"] = job_config.to_dict()
+
+        logger.info(f"Aim logging enabled. Logs will be saved at {aim_repo}")
+
+    def log(self, metrics: dict[str, Any], step: int) -> None:
+        for k, v in metrics.items():
+            name = k if self.tag is None else f"{self.tag}/{k}"
+            self.run.track(v, name=name, step=step)
+
+    def close(self) -> None:
+        self.run.close()
+
+
 class LoggerContainer(BaseLogger):
     """Container to call all loggers enabled in the job config."""
 
@@ -255,22 +325,34 @@ def _get_metrics_rank(
 
 
 def _build_metric_logger(
-    job_config: JobConfig, parallel_dims: ParallelDims, tag: str | None = None
+    job_config: JobConfig,
+    parallel_dims: ParallelDims,
+    tag: str | None = None,
+    aim_run_hash: str | None = None,
 ) -> BaseLogger:
     """
     Build an appropriate metric logger based on configuration.
+
+    Args:
+        job_config: Job configuration.
+        parallel_dims: Parallel dimensions.
+        tag: Tag to use for loggers.
+        aim_run_hash: Aim run hash to resume from (if loading from checkpoint).
     """
     metrics_config = job_config.metrics
 
     # Log initial config state
     logger.debug(
         f"Building logger with config: wandb={metrics_config.enable_wandb}, "
-        f"tensorboard={metrics_config.enable_tensorboard}"
+        f"tensorboard={metrics_config.enable_tensorboard}, "
+        f"aim={metrics_config.enable_aim}"
     )
 
     # Check if any logging backend is enabled
     has_logging_enabled = (
-        metrics_config.enable_tensorboard or metrics_config.enable_wandb
+        metrics_config.enable_tensorboard
+        or metrics_config.enable_wandb
+        or metrics_config.enable_aim
     )
 
     # Determine if this rank should log
@@ -326,6 +408,20 @@ def _build_metric_logger(
         tensorboard_logger = TensorBoardLogger(base_log_dir, tag)
         logger_container.add_logger(tensorboard_logger)
 
+    if metrics_config.enable_aim:
+        logger.debug("Attempting to create Aim logger")
+        try:
+            aim_logger = AimLogger(base_log_dir, job_config, tag, aim_run_hash)
+            logger_container.add_logger(aim_logger)
+        except Exception as e:
+            if "No module named 'aim'" in str(e):
+                logger.error(
+                    "Failed to create Aim logger: No module named 'aim'. "
+                    "Please install it using 'pip install aim'."
+                )
+            else:
+                logger.error(f"Failed to create Aim logger: {e}")
+
     if logger_container.number_of_loggers == 0:
         logger.debug("No loggers enabled, returning an empty LoggerContainer")
     return logger_container
@@ -365,6 +461,7 @@ class MetricsProcessor:
         parallel_dims: ParallelDims,
         tag: str | None = None,
     ):
+        self.tag = tag
         self.logger = _build_metric_logger(job_config, parallel_dims, tag)
         self.parallel_dims = parallel_dims
         self.job_config = job_config
@@ -389,6 +486,23 @@ class MetricsProcessor:
         self.optimizers = None
         self.lr_schedulers = None
         self.model_parts = None
+
+    def initialize_logger(self, aim_run_hash: str | None = None):
+        """Initialize the logger after checkpoint loading.
+
+        This must be called after checkpoint loading to create the actual logger.
+        If aim_run_hash is provided, it resumes an existing run; otherwise it
+        creates a fresh run.
+
+        Args:
+            aim_run_hash: The Aim run hash from the checkpoint, or None for a fresh run.
+        """
+        self.logger = _build_metric_logger(
+            self.job_config,
+            self.parallel_dims,
+            tag=self.tag,
+            aim_run_hash=aim_run_hash,
+        )
 
     def should_log(self, step: int) -> bool:
         return step == 1 or step % self.job_config.metrics.log_freq == 0

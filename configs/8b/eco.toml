@@ -1,0 +1,84 @@
+#!/tmp/eco/run_config.sh
+
+# Llama 3 8B with ECO (FP8 quantization + error-compensating optimizer).
+# Paper hyperparameters: AdamW, beta1=0.9, beta2=0.98, eps=1e-9, wd=0.1
+# LR: linear warmup (10% steps), cosine decay to 0.1x peak.
+# Preset for 8 GPUs with FSDP.
+
+[job]
+dump_folder = "./outputs/llama3_8b_eco"
+description = "Llama3 8B ECO"
+
+[profiling]
+enable_profiling = false
+
+[metrics]
+log_freq = 10
+enable_tensorboard = false
+enable_aim = true
+
+[model]
+name = "llama3"
+flavor = "8B"
+# Llama tokenizer (vocab=128256)
+hf_assets_path = "./assets/hf/Llama-3.1-8B"
+# Alternative: T5 tokenizer (uncomment, but note 8B flavor uses Llama vocab_size)
+# hf_assets_path = "./assets/tokenizers/t5-base"
+converters = ["quantize.linear.float8", "eco"]
+
+[optimizer]
+name = "AdamW"
+lr = 3e-4
+beta1 = 0.9
+beta2 = 0.98
+eps = 1e-9
+weight_decay = 0.1
+
+[lr_scheduler]
+warmup_steps = 200
+decay_type = "cosine"
+min_lr_factor = 0.1
+
+[training]
+local_batch_size = 1
+seq_len = 8192
+max_norm = 1.0
+steps = 1000
+dataset = "c4"
+
+[parallelism]
+data_parallel_replicate_degree = 1
+data_parallel_shard_degree = -1
+tensor_parallel_degree = 1
+pipeline_parallel_degree = 1
+
+[checkpoint]
+enable = true
+folder = "checkpoint"
+interval = 500
+last_save_model_only = true
+async_mode = "disabled"
+
+[activation_checkpoint]
+mode = "selective"
+selective_ac_option = "op"
+
+[compile]
+enable = false
+components = ["model", "loss"]
+
+[quantize.linear.float8]
+enable_fsdp_float8_all_gather = false
+precompute_float8_dynamic_scale_for_fsdp = false
+filter_fqns = ["output"]
+
+[eco]
+enabled = true
+heuristic_log_freq = 100
+stochastic_rounding = true
+
+[validation]
+enable = true
+dataset = "c4_validation"
+freq = 100
+steps = 1200

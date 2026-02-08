@@ -25,6 +25,9 @@ class Job:
     description: str = "default job"
     """Description of the job"""
 
+    run_name: str | None = None
+    """Custom run name for metrics tracking (used by Aim, Wandb, etc.)"""
+
     print_config: bool = False
     """Print the job configs to terminal"""
 
@@ -94,6 +97,9 @@ class Metrics:
 
     enable_wandb: bool = False
     """Whether to log metrics to Weights & Biases"""
+
+    enable_aim: bool = False
+    """Whether to log metrics to Aim"""
 
 
 @dataclass
@@ -989,6 +995,18 @@ class Debug:
 
 
 @dataclass
+class ECO:
+    enabled: bool = False
+    """Whether to enable ECO (Error-Compensating Optimizer) for quantized training without master weights."""
+
+    heuristic_log_freq: int = 100
+    """How often (in steps) to log heuristic validation metrics (e_t vs e_{t+1} comparison)."""
+
+    stochastic_rounding: bool = False
+    """Whether to use stochastic rounding instead of round-to-nearest for weight quantization."""
+
+
+@dataclass
 class JobConfig:
     """
     Default container for training configuration.
@@ -1008,6 +1026,7 @@ class JobConfig:
     )
     compile: Compile = field(default_factory=Compile)
     quantize: Quantize = field(default_factory=Quantize)
+    eco: ECO = field(default_factory=ECO)
     comm: Comm = field(default_factory=Comm)
     memory_estimation: MemoryEstimation = field(default_factory=MemoryEstimation)
     fault_tolerance: FaultTolerance = field(default_factory=FaultTolerance)

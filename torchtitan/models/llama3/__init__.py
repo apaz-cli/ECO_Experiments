@@ -30,6 +30,30 @@ llama3_args = {
     "debugmodel": TransformerModelArgs(
         dim=256, n_layers=6, n_heads=16, vocab_size=2048, rope_theta=500000
     ),
+    # --- Scaling law models (ECO experiments, matching QUEST paper configs) ---
+    # Architecture: Llama-style (SwiGLU FFN, RoPE, no bias).
+    # FFN hidden dim = int(8/3 * dim) rounded to multiple_of=256 (QUEST default).
+    # All have head_dim=128. Use with T5 tokenizer (vocab_size=32100).
+    # QUEST peak LRs: 30M=1.2e-3, 50M=1.2e-3, 100M=6e-4, 200M=3e-4,
+    #                  430M=1.5e-4, 800M=7.5e-5 (set in TOML, not here).
+    "30M": TransformerModelArgs(
+        dim=640, n_layers=6, n_heads=5, vocab_size=32100, rope_theta=500000
+    ),
+    "50M": TransformerModelArgs(
+        dim=768, n_layers=7, n_heads=6, vocab_size=32100, rope_theta=500000
+    ),
+    "100M": TransformerModelArgs(
+        dim=1024, n_layers=8, n_heads=8, vocab_size=32100, rope_theta=500000
+    ),
+    "200M": TransformerModelArgs(
+        dim=1280, n_layers=10, n_heads=10, vocab_size=32100, rope_theta=500000
+    ),
+    "430M": TransformerModelArgs(
+        dim=1664, n_layers=13, n_heads=13, vocab_size=32100, rope_theta=500000
+    ),
+    "800M": TransformerModelArgs(
+        dim=2048, n_layers=16, n_heads=16, vocab_size=32100, rope_theta=500000
+    ),
     "debugmodel_flex_attn": TransformerModelArgs(
         dim=256,
         n_layers=6,

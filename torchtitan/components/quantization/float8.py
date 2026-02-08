@@ -34,15 +34,19 @@ class Float8LinearConverter(QuantizationConverter):
             compile_config.enable and "model" in compile_config.components
         )
 
-        if has_cuda_capability(8, 9) or (
-            float8_config.emulate and not model_compile_enabled
-        ):
-            pass
-        else:
-            raise ValueError(
-                "Failed to swap to Float8Linear because float8 is only supported on SM89 or later."
-                "To enable testing on older hardware, set `float8.emulate` to True in eager mode.",
-            )
+        if not has_cuda_capability(8, 9):
+            if not float8_config.emulate:
+                logger.warning(
+                    "GPU does not have SM89+ capability (native FP8). "
+                    "Auto-enabling float8 emulation mode."
+                )
+                float8_config.emulate = True
+            if model_compile_enabled:
+                raise ValueError(
+                    "Float8 emulation is not supported with torch.compile. "
+                    "Either use a GPU with SM89+ (e.g. RTX 4070, H100, B200) "
+                    "or disable compile."
+                )
         try:
             from torchao.float8 import Float8LinearConfig as TorchAOFloat8LinearConfig
         except ImportError as e:
@@ -159,7 +163,7 @@ class Float8LinearConverter(QuantizationConverter):
             f"{self.config.enable_fsdp_float8_all_gather}"
         )
 
-    def post_optimizer_hook(self, model: nn.Module | list[nn.Module]):
+    def post_optimizer_hook(self, model: nn.Module | list[nn.Module], **kwargs):
         if not self.enabled:
             return
 
@@ -231,7 +235,7 @@ class Float8GroupedMMConverter(QuantizationConverter):
             "to use dynamic float8 rowwise quantization with scaled grouped GEMMs"
         )
 
-    def post_optimizer_hook(self, model: nn.Module | list[nn.Module]):
+    def post_optimizer_hook(self, model: nn.Module | list[nn.Module], **kwargs):
         pass
 
 
