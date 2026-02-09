@@ -1,80 +1,58 @@
 """
 Smoke test: runs all 16 ECO config combinations (2x2x2x2) on the debug model
-for 5 steps each, asserting none crash.
+for 5 steps each in parallel, asserting none crash.
 
-This is a functional test that invokes torchrun via run_config.sh, so it
+This is a functional test that invokes run_sweep.py → torchrun, so it
 requires a GPU and the full training stack. Run with:
 
-    pytest tests/unit_tests/test_sweep_smoke.py -v
+    pytest tests/unit_tests/test_eco_sweep_smoketest.py -v
 """
 
 import os
 import subprocess
+import sys
 import tempfile
 
-import pytest
-
-# Import sweep infrastructure
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from run_sweep import generate_variations, load_sweep_file
-
-REPO_ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
-SWEEP_FILE = os.path.join(REPO_ROOT, "sweeps", "debug_smoke.py")
-
-# Extra overrides for testing: 5 steps, no logging
-TEST_OVERRIDES = [
-    "--training.steps", "5",
-    "--metrics.no-enable-aim",
-    "--metrics.no-enable-tensorboard",
-]
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def _run_config(base_config, overrides, run_dir, run_name):
-    """Run a single training config via run_config.sh. Returns (success, log)."""
-    os.makedirs(run_dir, exist_ok=True)
-    log_file = os.path.join(run_dir, "training.log")
-
+def test_all_configs_run(tmp_path):
     cmd = [
-        os.path.join(REPO_ROOT, "run_config.sh"),
-        base_config,
-        "--job.dump_folder", run_dir,
-        *overrides,
-        *TEST_OVERRIDES,
+        sys.executable, os.path.join(REPO_ROOT, "run_sweep.py"),
+        "--sweep", "debug_smoke",
+        "--output_dir", str(tmp_path),
+        "-g",
+        "-j", "4",
+        "--training.steps", "5",
+        "--metrics.no-enable-aim",
+        "--metrics.no-enable-tensorboard",
     ]
 
-    env = os.environ.copy()
-    env["NGPU"] = "1"
+    result = subprocess.run(
+        cmd, cwd=REPO_ROOT,
+        capture_output=True, text=True,
+        timeout=300,
+    )
 
-    with open(log_file, "w") as f:
-        result = subprocess.run(
-            cmd,
-            cwd=REPO_ROOT,
-            env=env,
-            stdout=f,
-            stderr=subprocess.STDOUT,
-        )
+    # Print output for visibility in pytest -v
+    if result.stdout:
+        print(result.stdout)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
 
-    with open(log_file) as f:
-        log_contents = f.read()
+    assert result.returncode == 0, (
+        f"Sweep failed (exit {result.returncode}).\n"
+        f"stdout tail:\n{result.stdout[-3000:]}\n"
+        f"stderr tail:\n{result.stderr[-1000:]}"
+    )
 
-    return result.returncode == 0, log_contents
-
-
-# Load sweep and generate all 16 variations
-_sweep_name, _options, _base_config = load_sweep_file(SWEEP_FILE)
-_variations = generate_variations(_sweep_name, _options)
+    # Verify all 16 ran by checking "16/16 OK" in output
+    assert "16/16 OK" in result.stdout, (
+        f"Not all runs passed.\nstdout tail:\n{result.stdout[-3000:]}"
+    )
 
 
-@pytest.mark.parametrize(
-    "variation",
-    _variations,
-    ids=[v["name"] for v in _variations],
-)
-def test_config_runs_without_error(variation, tmp_path):
-    run_name = variation["name"]
-    run_dir = str(tmp_path / run_name)
-
-    success, log = _run_config(_base_config, variation["overrides"], run_dir, run_name)
-
-    assert success, f"{run_name} failed.\nLog tail:\n{log[-2000:]}"
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmp_path:
+        test_all_configs_run(tmp_path)
+    print("PASSED")
