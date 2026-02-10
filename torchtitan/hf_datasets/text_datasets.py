@@ -4,13 +4,14 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 from dataclasses import asdict
 from functools import partial
 from typing import Any, Callable
 
 import torch
 
-from datasets import Dataset, load_dataset
+from datasets import Dataset, load_dataset, load_from_disk
 from datasets.distributed import split_dataset_by_node
 from torch.distributed.checkpoint.stateful import Stateful
 from torch.utils.data import IterableDataset
@@ -32,6 +33,13 @@ def _process_c4_text(sample: dict[str, Any]) -> str:
     return sample["text"]
 
 
+def _load_fineweb_edu_dataset(dataset_path: str, config: str = "default"):
+    """Load fineweb-edu dataset with given config."""
+    if os.path.isdir(dataset_path):
+        return load_from_disk(dataset_path)
+    return load_dataset(dataset_path, name=config, split="train", streaming=True)
+
+
 # Add your dataset here - more information at docs/datasets.md
 DATASETS = {
     "c4": DatasetConfig(
@@ -47,6 +55,21 @@ DATASETS = {
     "c4_validation": DatasetConfig(
         path="allenai/c4",
         loader=partial(_load_c4_dataset, split="validation"),
+        sample_processor=_process_c4_text,
+    ),
+    "fineweb_edu": DatasetConfig(
+        path="HuggingFaceFW/fineweb-edu",
+        loader=partial(_load_fineweb_edu_dataset, config="default"),
+        sample_processor=_process_c4_text,
+    ),
+    "fineweb_edu_sample10bt": DatasetConfig(
+        path="HuggingFaceFW/fineweb-edu",
+        loader=partial(_load_fineweb_edu_dataset, config="sample-10BT"),
+        sample_processor=_process_c4_text,
+    ),
+    "fineweb_edu_sample100bt": DatasetConfig(
+        path="HuggingFaceFW/fineweb-edu",
+        loader=partial(_load_fineweb_edu_dataset, config="sample-100BT"),
         sample_processor=_process_c4_text,
     ),
 }

@@ -1,7 +1,7 @@
 #!/tmp/eco/run_config.sh
 
-# Llama 3 8B BF16 baseline (standard training, no quantization, no ECO).
-# Matches ECO config hyperparameters for fair comparison.
+# Llama 3 8B BF16 baseline (bf16 quantization, no ECO injection).
+# Same code path as ECO config for fair comparison.
 # Preset for 8 GPUs with FSDP.
 
 [job]
@@ -23,7 +23,7 @@ flavor = "8B"
 hf_assets_path = "./assets/hf/Llama-3.1-8B"
 
 [optimizer]
-name = "AdamW"
+name = "ECOAdamW"
 lr = 3e-4
 beta1 = 0.9
 beta2 = 0.98
@@ -40,7 +40,8 @@ local_batch_size = 1
 seq_len = 8192
 max_norm = 1.0
 steps = 1000
-dataset = "c4"
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -63,8 +64,14 @@ selective_ac_option = "op"
 enable = false
 components = ["model", "loss"]
 
+[eco]
+enabled = false
+quantize_weights = true
+quant_dtype = "bf16"
+
 [validation]
-enable = true
-dataset = "c4_validation"
+enable = false
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"
 freq = 100
 steps = 1200

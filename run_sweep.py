@@ -314,6 +314,9 @@ def main():
                         help="Print commands without running")
 
     args, extra_overrides = parser.parse_known_args(argv)
+    # Remove the '--' separator if it appears as the first extra argument
+    if extra_overrides and extra_overrides[0] == '--':
+        extra_overrides = extra_overrides[1:]
 
     if sweep_name is None:
         sweep_name = args.sweep

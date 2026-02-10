@@ -130,13 +130,16 @@ class QuantizedTensor(torch.Tensor):
             # Tensor-wise quantization
             amax = tensor.abs().amax()
         
-        # Compute scale (for symmetric quantization, zero_point = 0)
-        fp8_max = torch.finfo(quant_dtype).max
-        scale = amax / fp8_max
-        scale = torch.where(scale > 0, scale, torch.ones_like(scale))
-        
-        # Quantize
-        quantized = (tensor / scale).to(quant_dtype)
+        # For FP8: per-tensor scaling required (limited dynamic range)
+        # For standard dtypes (bf16, fp16): cast directly, scale = 1.0
+        if quant_dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            dtype_max = torch.finfo(quant_dtype).max
+            scale = amax / dtype_max
+            scale = torch.where(scale > 0, scale, torch.ones_like(scale))
+            quantized = (tensor / scale).to(quant_dtype)
+        else:
+            scale = torch.ones(1, device=tensor.device, dtype=tensor.dtype)
+            quantized = tensor.to(quant_dtype)
         
         return cls(
             data=quantized,

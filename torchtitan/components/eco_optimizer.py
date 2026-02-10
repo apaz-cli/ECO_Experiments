@@ -37,6 +37,12 @@ from torchtitan.components.quantized_tensor import QuantizedTensor
 __all__ = ["ECOAdamW"]
 
 
+_DTYPE_TO_QUANT_STR = {
+    torch.float8_e4m3fn: "fp8",
+    torch.bfloat16: "bf16",
+}
+
+
 class ECOAdamW(Optimizer):
     """AdamW optimizer with ECO (Error-Compensating Optimizer) support.
 
@@ -53,6 +59,10 @@ class ECOAdamW(Optimizer):
             requantization (default: False)
         heuristic_log_freq: How often (in steps) to compute heuristic
             diagnostics.  0 means never (default: 0)
+        quantize_weights: Whether to simulate quantized weight storage via
+            quant→dequant round-trip on regular params (default: True)
+        quant_dtype: Quantization dtype string for simulated weight storage.
+            'fp8' for FP8 E4M3, 'bf16' for bfloat16 baseline (default: 'bf16')
     """
 
     def __init__(
@@ -67,6 +77,8 @@ class ECOAdamW(Optimizer):
         eco_enabled: bool = True,
         stochastic_rounding: bool = False,
         heuristic_log_freq: int = 0,
+        quantize_weights: bool = True,
+        quant_dtype: str = "bf16",
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -92,6 +104,8 @@ class ECOAdamW(Optimizer):
         self._eco_enabled = eco_enabled
         self._stochastic_rounding = stochastic_rounding
         self._heuristic_log_freq = heuristic_log_freq
+        self._quantize_weights = quantize_weights
+        self._quant_dtype = quant_dtype
         self._eco_step_count = 0
         # Accumulated heuristic metrics (consumed by get_eco_metrics)
         self._eco_metrics: dict[str, float] = {}
@@ -163,7 +177,13 @@ class ECOAdamW(Optimizer):
                 state["step"] += 1
                 step = state["step"].item()
 
-                if isinstance(param, QuantizedTensor):
+                if self._quantize_weights and param.dim() >= 2:
+                    self._step_simulated_quant(
+                        param, grad, exp_avg, exp_avg_sq,
+                        lr, beta1, beta2, eps, weight_decay, step,
+                        optim_compute_dtype, should_log, layer_metrics,
+                    )
+                elif isinstance(param, QuantizedTensor):
                     self._step_quantized(
                         param, grad, exp_avg, exp_avg_sq,
                         lr, beta1, beta2, eps, weight_decay, step,
@@ -209,6 +229,89 @@ class ECOAdamW(Optimizer):
 
         denom = (exp_avg_sq.sqrt() / math.sqrt(bias_correction2)).add_(eps)
         param.addcdiv_(exp_avg, denom, value=-step_size)
+
+    # ------------------------------------------------------------------
+    # Simulated quantization (regular params with quant→dequant round-trip)
+    # ------------------------------------------------------------------
+    def _step_simulated_quant(
+        self,
+        param: torch.Tensor,
+        grad: torch.Tensor,
+        exp_avg: torch.Tensor,
+        exp_avg_sq: torch.Tensor,
+        lr: float,
+        beta1: float,
+        beta2: float,
+        eps: float,
+        weight_decay: float,
+        step: int,
+        optim_compute_dtype: torch.dtype,
+        should_log: bool,
+        layer_metrics: dict[str, list[float]],
+    ):
+        # Work in optim_compute_dtype (FP32 by default) to avoid cancellation
+        param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
+        grad_compute = grad if grad.dtype == optim_compute_dtype else grad.to(optim_compute_dtype)
+
+        if exp_avg.dtype == optim_compute_dtype:
+            exp_avg_c = exp_avg
+            exp_avg_sq_c = exp_avg_sq
+            copy_back = False
+        else:
+            exp_avg_c = exp_avg.to(optim_compute_dtype)
+            exp_avg_sq_c = exp_avg_sq.to(optim_compute_dtype)
+            copy_back = True
+
+        # 1. Standard Adam update
+        exp_avg_c.mul_(beta1).add_(grad_compute, alpha=1 - beta1)
+        exp_avg_sq_c.mul_(beta2).addcmul_(grad_compute, grad_compute, value=1 - beta2)
+
+        bias_correction1 = 1 - beta1 ** step
+        bias_correction2 = 1 - beta2 ** step
+        step_size = lr / bias_correction1
+
+        denom = (exp_avg_sq_c.sqrt() / math.sqrt(bias_correction2)).add_(eps)
+
+        if weight_decay != 0:
+            param_f.mul_(1 - lr * weight_decay)
+
+        param_f.addcdiv_(exp_avg_c, denom, value=-step_size)
+
+        # θ̃ is now in param_f — the ideal updated weight BEFORE requant.
+
+        # 2. Quant→dequant round-trip to simulate FP8 storage
+        theta_hat = self._requantize(
+            param_f, self._quant_dtype, self._stochastic_rounding
+        )
+
+        # 3. ECO injection (Algorithm 3)
+        if self._eco_enabled:
+            error = param_f - theta_hat  # e = θ̃ − θ_hat
+
+            injection_coeff = (bias_correction1 / lr) * (1.0 - 1.0 / beta1)
+            adaptive_scale = (exp_avg_sq_c / bias_correction2).sqrt().add_(eps)
+            error_injected = injection_coeff * adaptive_scale * error
+
+            if exp_avg_c.dtype != error_injected.dtype:
+                error_injected = error_injected.to(exp_avg_c.dtype)
+            exp_avg_c.add_(error_injected)
+
+            # Heuristic diagnostics
+            if should_log:
+                prev_error = self.state[param].get("prev_error")
+                if prev_error is not None:
+                    self._compute_heuristics(
+                        layer_metrics, prev_error, error, exp_avg_c, lr
+                    )
+                self.state[param]["prev_error"] = error.detach().clone()
+
+        # Write momentum back if we changed dtype
+        if copy_back:
+            exp_avg.copy_(exp_avg_c.to(exp_avg.dtype))
+            exp_avg_sq.copy_(exp_avg_sq_c.to(exp_avg_sq.dtype))
+
+        # 4. Store θ_hat back into param (the weight now holds the FP8-representable value)
+        param.data.copy_(theta_hat.to(param.dtype))
 
     # ------------------------------------------------------------------
     # ECO-aware AdamW (QuantizedTensor params)
@@ -265,8 +368,9 @@ class ECOAdamW(Optimizer):
         # θ̃ is now in param_dequant — the ideal updated weight BEFORE requant.
 
         # 3. Requantize θ̃ → θ_hat (optionally with stochastic rounding)
+        quant_str = _DTYPE_TO_QUANT_STR[param._quant_dtype]
         theta_hat = self._requantize(
-            param_dequant, param._quant_dtype, self._stochastic_rounding
+            param_dequant, quant_str, self._stochastic_rounding
         )
 
         # 4. ECO injection (Algorithm 3)
@@ -308,27 +412,33 @@ class ECOAdamW(Optimizer):
     @staticmethod
     def _requantize(
         tensor: torch.Tensor,
-        quant_dtype: torch.dtype,
+        quant_dtype: str,
         stochastic_rounding: bool,
     ) -> torch.Tensor:
-        """Round-trip through FP8 with optional stochastic rounding.
+        """Round-trip through quant_dtype with optional stochastic rounding.
 
-        Returns the *dequantized* FP8 value (in the same dtype as input).
+        For fp8: per-tensor scaling (required by limited FP8 dynamic range).
+        For bf16: simple cast round-trip (no scaling needed).
+        Returns the dequantized value in the original dtype.
         """
-        fp8_max = torch.finfo(quant_dtype).max
-        amax = tensor.abs().amax()
-        scale = torch.where(amax > 0, amax / fp8_max, torch.ones_like(amax))
-        scaled = tensor / scale
+        if quant_dtype == "fp8":
+            fp8 = torch.float8_e4m3fn
+            fp8_max = torch.finfo(fp8).max
+            amax = tensor.abs().amax()
+            scale = torch.where(amax > 0, amax / fp8_max, torch.ones_like(amax))
+            scaled = tensor / scale
 
-        if stochastic_rounding:
-            # Probabilistic flip: add uniform noise in [-0.5 ulp, +0.5 ulp]
-            # so E[round(x)] = x.
-            ulp = scaled.abs() * (2 ** -3)  # 3 mantissa bits for E4M3
-            noise = (torch.rand_like(scaled) - 0.5) * ulp
-            scaled = (scaled + noise).clamp(-fp8_max, fp8_max)
+            if stochastic_rounding:
+                ulp = scaled.abs() * (2 ** -3)  # 3 mantissa bits for E4M3
+                noise = (torch.rand_like(scaled) - 0.5) * ulp
+                scaled = (scaled + noise).clamp(-fp8_max, fp8_max)
 
-        quantized = scaled.to(quant_dtype)
-        return quantized.to(tensor.dtype) * scale
+            quantized = scaled.to(fp8)
+            return quantized.to(tensor.dtype) * scale
+        elif quant_dtype == "bf16":
+            return tensor.to(torch.bfloat16).to(tensor.dtype)
+        else:
+            raise ValueError(f"Unsupported quant_dtype: {quant_dtype!r}. Use 'fp8' or 'bf16'.")
 
     # ------------------------------------------------------------------
     # Heuristic helpers

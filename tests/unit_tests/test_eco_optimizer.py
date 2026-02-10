@@ -41,6 +41,7 @@ class TestECOAdamW:
         optimizer = ECOAdamW(
             [param], lr=1e-3, weight_decay=0.1,
             optim_state_dtype=torch.float32, optim_compute_dtype=torch.float32,
+            quantize_weights=False,
         )
         param.grad = torch.zeros_like(param)
         optimizer.step()
@@ -133,7 +134,7 @@ class TestECOAdamWErrorConditions:
     def test_zero_learning_rate(self):
         param = torch.randn(32, 32, requires_grad=True)
         original = param.data.clone()
-        optimizer = ECOAdamW([param], lr=0.0)
+        optimizer = ECOAdamW([param], lr=0.0, quantize_weights=False)
         param.grad = torch.randn_like(param)
         optimizer.step()
         torch.testing.assert_close(param.data, original, atol=1e-6, rtol=0)

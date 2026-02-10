@@ -1,7 +1,9 @@
 #!/tmp/eco/run_sweep.py
-BASE_CONFIG = "configs/debug/baseline.toml"
-ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
-ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
+# Section 3: BF16 optimizer states
+# Dimensions: ±ECO × FP32/BF16 optimizer states (4 runs)
+BASE_CONFIG = "configs/experiments/master.toml"
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
 
 OPTIONS = {
     "eco_enabled": {
@@ -15,6 +17,6 @@ OPTIONS = {
             "fp32": ["--eco.optim-state-dtype", "fp32"],
             "bf16": ["--eco.optim-state-dtype", "bf16"],
         },
-        "name": "opt",
+        "name": "osdt",
     },
 }

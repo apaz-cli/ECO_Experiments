@@ -39,20 +39,38 @@ llama3_args = {
     "30M": TransformerModelArgs(
         dim=640, n_layers=6, n_heads=5, vocab_size=32100, rope_theta=500000
     ),
+    "30M_llama": TransformerModelArgs(
+        dim=640, n_layers=6, n_heads=5, vocab_size=128256, rope_theta=500000
+    ),
     "50M": TransformerModelArgs(
         dim=768, n_layers=7, n_heads=6, vocab_size=32100, rope_theta=500000
+    ),
+    "50M_llama": TransformerModelArgs(
+        dim=768, n_layers=7, n_heads=6, vocab_size=128256, rope_theta=500000
     ),
     "100M": TransformerModelArgs(
         dim=1024, n_layers=8, n_heads=8, vocab_size=32100, rope_theta=500000
     ),
+    "100M_llama": TransformerModelArgs(
+        dim=1024, n_layers=8, n_heads=8, vocab_size=128256, rope_theta=500000
+    ),
     "200M": TransformerModelArgs(
         dim=1280, n_layers=10, n_heads=10, vocab_size=32100, rope_theta=500000
+    ),
+    "200M_llama": TransformerModelArgs(
+        dim=1280, n_layers=10, n_heads=10, vocab_size=128256, rope_theta=500000
     ),
     "430M": TransformerModelArgs(
         dim=1664, n_layers=13, n_heads=13, vocab_size=32100, rope_theta=500000
     ),
+    "430M_llama": TransformerModelArgs(
+        dim=1664, n_layers=13, n_heads=13, vocab_size=128256, rope_theta=500000
+    ),
     "800M": TransformerModelArgs(
         dim=2048, n_layers=16, n_heads=16, vocab_size=32100, rope_theta=500000
+    ),
+    "800M_llama": TransformerModelArgs(
+        dim=2048, n_layers=16, n_heads=16, vocab_size=128256, rope_theta=500000
     ),
     "debugmodel_flex_attn": TransformerModelArgs(
         dim=256,

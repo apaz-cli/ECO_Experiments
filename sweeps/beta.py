@@ -1,7 +1,9 @@
 #!/tmp/eco/run_sweep.py
-BASE_CONFIG = "configs/debug/baseline.toml"
-ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
-ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
+# Section 4: Adam β₁/β₂ sensitivity analysis
+# Dimensions: β₁(5) × β₂(4) × ±ECO (40 runs)
+BASE_CONFIG = "configs/experiments/master.toml"
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
 
 BETA1_VALUES = [0.8, 0.85, 0.9, 0.95, 0.99]
 BETA2_VALUES = [0.95, 0.98, 0.99, 0.999]

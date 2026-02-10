@@ -345,6 +345,8 @@ def build_optimizers(
             optimizer_kwargs["eco_enabled"] = eco_config.enabled
             optimizer_kwargs["stochastic_rounding"] = eco_config.stochastic_rounding
             optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
+            optimizer_kwargs["quantize_weights"] = eco_config.quantize_weights
+            optimizer_kwargs["quant_dtype"] = eco_config.quant_dtype
 
     if optim_in_bwd:
         return OptimizersInBackwardContainer(

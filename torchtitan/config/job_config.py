@@ -1035,6 +1035,19 @@ class ECO:
     e = θ̃ − Q(θ̃) is computed without catastrophic cancellation.
     """
 
+    quantize_weights: bool = True
+    """
+    Simulate quantized weight storage via quant→dequant round-trip inside the optimizer.
+    When enabled, weight matrices (dim >= 2) undergo quantization after each Adam
+    update. Use quant_dtype to control the quantization level.
+    """
+
+    quant_dtype: str = "bf16"
+    """
+    Quantization dtype for simulated weight storage.
+    Options: "fp8" (FP8 E4M3), "bf16" (bfloat16, effectively baseline). Default is "bf16".
+    """
+
 
 @dataclass
 class JobConfig:

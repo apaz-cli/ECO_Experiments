@@ -264,6 +264,9 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
 
         self.ft_manager.maybe_set_all_reduce_hook(self.model_parts)
 
+        total_params = sum(p.numel() for m in self.model_parts for p in m.parameters())
+        logger.info(f"Model has {total_params:,} parameters ({total_params/1e6:.1f}M)")
+
         # initialize device memory monitor and get peak flops for MFU calculation
         device_memory_monitor = self.metrics_processor.device_memory_monitor
         gpu_peak_flops = utils.get_peak_flops(device_memory_monitor.device_name)
@@ -276,8 +279,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         )
 
         # build optimizer after applying parallelisms to the model
-        # Pass eco_config if ECOAdamW is requested
-        eco_config = job_config.eco if job_config.eco.enabled else None
+        eco_config = job_config.eco
         self.optimizers = self.train_spec.build_optimizers_fn(
             self.model_parts, job_config.optimizer, parallel_dims, self.ft_manager, eco_config
         )

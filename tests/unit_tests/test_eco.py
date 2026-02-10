@@ -45,26 +45,26 @@ def _fake_grad(param):
 class TestRequantize:
     def test_roundtrip_error_is_small(self):
         t = torch.randn(128, 128)
-        result = ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=False)
+        result = ECOAdamW._requantize(t, "fp8", stochastic_rounding=False)
         rel_error = (t - result).abs() / (t.abs() + 1e-12)
         assert rel_error.mean() < 0.1
 
     def test_roundtrip_is_idempotent(self):
         t = torch.randn(64, 64)
-        once = ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=False)
-        twice = ECOAdamW._requantize(once, torch.float8_e4m3fn, stochastic_rounding=False)
+        once = ECOAdamW._requantize(t, "fp8", stochastic_rounding=False)
+        twice = ECOAdamW._requantize(once, "fp8", stochastic_rounding=False)
         assert torch.equal(once, twice)
 
     def test_stochastic_rounding_varies(self):
         t = torch.randn(128, 128)
-        results = [ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=True) for _ in range(10)]
+        results = [ECOAdamW._requantize(t, "fp8", stochastic_rounding=True) for _ in range(10)]
         any_differ = any(not torch.equal(results[i], results[j]) for i in range(len(results)) for j in range(i+1, len(results)))
         assert any_differ, "Stochastic rounding should produce varying outputs"
 
     def test_stochastic_rounding_is_unbiased(self):
         t = torch.randn(256, 256)
         N = 50
-        results = torch.stack([ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=True) for _ in range(N)])
+        results = torch.stack([ECOAdamW._requantize(t, "fp8", stochastic_rounding=True) for _ in range(N)])
         mean_result = results.float().mean(dim=0)
         error = (mean_result - t.float()).abs().mean()
         assert error < 0.01, f"Stochastic rounding bias too large: {error:.6f}"
@@ -315,25 +315,25 @@ class TestTraining:
 class TestEdgeCases:
     def test_zero_tensor(self):
         t = torch.zeros(32, 32)
-        result = ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=False)
+        result = ECOAdamW._requantize(t, "fp8", stochastic_rounding=False)
         assert torch.allclose(result, t, atol=1e-6)
         assert not torch.isnan(result).any()
 
     def test_extreme_values(self):
         large = torch.full((16, 16), 1e6)
-        result = ECOAdamW._requantize(large, torch.float8_e4m3fn, stochastic_rounding=False)
+        result = ECOAdamW._requantize(large, "fp8", stochastic_rounding=False)
         assert not torch.isnan(result).any()
         assert not torch.isinf(result).any()
 
     def test_single_element(self):
         t = torch.tensor([5.0])
-        result = ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=False)
+        result = ECOAdamW._requantize(t, "fp8", stochastic_rounding=False)
         assert result.numel() == 1
         assert not torch.isnan(result)
 
     def test_mixed_sign(self):
         t = torch.randn(16, 16)
-        result = ECOAdamW._requantize(t, torch.float8_e4m3fn, stochastic_rounding=False)
+        result = ECOAdamW._requantize(t, "fp8", stochastic_rounding=False)
         sign_match = torch.sign(result) == torch.sign(t)
         assert sign_match.float().mean() > 0.8
 

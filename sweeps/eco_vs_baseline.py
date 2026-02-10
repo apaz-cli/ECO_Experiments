@@ -1,7 +1,9 @@
 #!/tmp/eco/run_sweep.py
-BASE_CONFIG = "configs/debug/baseline.toml"
-ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
-ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
+# Section 2: ECO vs Baseline comparison
+# Dimensions: ±ECO (2 runs)
+BASE_CONFIG = "configs/experiments/master.toml"
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
 
 OPTIONS = {
     "eco_enabled": {

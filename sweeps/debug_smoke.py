@@ -1,15 +1,24 @@
 #!/tmp/eco/run_sweep.py
-# Smoke test: 2x2x2x2 = 16 runs on debugmodel.
+# Smoke test: 2x2x2x2x2 = 32 runs on debugmodel.
 # Validates that all ECO config combos run without blowing up.
 BASE_CONFIG = "configs/debug/baseline.toml"
-ECO_OFF = ["--optimizer.name", "AdamW", "--eco.no-enabled"]
-ECO_ON = ["--optimizer.name", "ECOAdamW", "--eco.enabled"]
 
 OPTIONS = {
     "eco_enabled": {
         "values": [False, True],
-        "flags": {False: ECO_OFF, True: ECO_ON},
+        "flags": {
+            False: ["--eco.no-enabled"],
+            True: ["--eco.enabled"],
+        },
         "name": "eco",
+    },
+    "quant_dtype": {
+        "values": ["bf16", "fp8"],
+        "flags": {
+            "bf16": ["--eco.quant-dtype", "bf16"],
+            "fp8": ["--eco.quant-dtype", "fp8"],
+        },
+        "name": "qdt",
     },
     "stochastic_rounding": {
         "values": [False, True],

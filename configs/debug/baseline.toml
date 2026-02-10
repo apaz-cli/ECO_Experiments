@@ -20,11 +20,16 @@ flavor = "debugmodel"
 hf_assets_path = "./tests/assets/tokenizer"
 
 [optimizer]
-name = "AdamW"
+name = "ECOAdamW"
 lr = 8e-4
 beta1 = 0.9
 beta2 = 0.98
 eps = 1e-9
+
+[eco]
+enabled = false
+quantize_weights = true
+quant_dtype = "bf16"
 
 [lr_scheduler]
 warmup_steps = 2
@@ -37,7 +42,8 @@ local_batch_size = 8
 seq_len = 2048
 max_norm = 1.0
 steps = 20
-dataset = "c4_test"
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -58,3 +64,5 @@ components = ["model", "loss"]
 
 [validation]
 enable = false
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"

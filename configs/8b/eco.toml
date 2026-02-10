@@ -41,7 +41,8 @@ local_batch_size = 1
 seq_len = 8192
 max_norm = 1.0
 steps = 1000
-dataset = "c4"
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -66,11 +67,14 @@ components = ["model", "loss"]
 
 [eco]
 enabled = true
+quantize_weights = true
+quant_dtype = "fp8"
 heuristic_log_freq = 100
 stochastic_rounding = true
 
 [validation]
-enable = true
-dataset = "c4_validation"
+enable = false
+dataset = "fineweb_edu_sample10bt"
+dataset_path = "/mnt/skraid0/fineweb"
 freq = 100
 steps = 1200
