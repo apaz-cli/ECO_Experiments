@@ -146,7 +146,6 @@ class ECOAdamW(Optimizer):
             "eco/heuristic/norm_ratio": [],
             "eco/heuristic/cosine_sim": [],
             "eco/heuristic/rel_diff_norm": [],
-            "eco/heuristic/injection_rel_error": [],
         }
 
         for group in self.param_groups:
@@ -301,7 +300,7 @@ class ECOAdamW(Optimizer):
                 prev_error = self.state[param].get("prev_error")
                 if prev_error is not None:
                     self._compute_heuristics(
-                        layer_metrics, prev_error, error, exp_avg_c, lr
+                        layer_metrics, prev_error, error,
                     )
                 self.state[param]["prev_error"] = error.detach().clone()
 
@@ -390,7 +389,7 @@ class ECOAdamW(Optimizer):
                 prev_error = self.state[param].get("prev_error")
                 if prev_error is not None:
                     self._compute_heuristics(
-                        layer_metrics, prev_error, error, exp_avg_c, lr
+                        layer_metrics, prev_error, error,
                     )
                 self.state[param]["prev_error"] = error.detach().clone()
 
@@ -448,8 +447,6 @@ class ECOAdamW(Optimizer):
         layer_metrics: dict[str, list[float]],
         e_prev: torch.Tensor,
         e_curr: torch.Tensor,
-        momentum: torch.Tensor,
-        lr: float,
     ):
         e_prev_f = e_prev.flatten().float()
         e_curr_f = e_curr.flatten().float()
@@ -468,11 +465,6 @@ class ECOAdamW(Optimizer):
         layer_metrics["eco/heuristic/rel_diff_norm"].append(
             (diff_norm / norm_prev).item()
         )
-        m_norm = momentum.flatten().float().norm()
-        if m_norm > 1e-12:
-            layer_metrics["eco/heuristic/injection_rel_error"].append(
-                ((1.0 / lr) * diff_norm / m_norm).item()
-            )
 
     def _aggregate_metrics(self, layer_metrics: dict[str, list[float]]):
         self._eco_metrics.clear()

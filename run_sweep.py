@@ -160,7 +160,7 @@ def build_cmd(base_config_path, overrides, run_dir, run_name, extra_overrides=()
 def run_training(base_config_path, overrides, output_dir, run_name,
                  experiment_name, extra_overrides=(), gpu_id=None):
     """Run training for one configuration. Returns (run_name, success, elapsed, log_file)."""
-    run_dir = os.path.join(output_dir, run_name)
+    run_dir = os.path.join(output_dir, experiment_name, run_name)
     os.makedirs(run_dir, exist_ok=True)
     log_file = os.path.join(run_dir, "training.log")
 
@@ -302,7 +302,7 @@ def main():
         sweeps = load_sweeps()
         parser.add_argument("--sweep", required=True, choices=sorted(sweeps),
                             help="Sweep name")
-    parser.add_argument("--output_dir", default="./outputs/sweeps",
+    parser.add_argument("--output_dir", default=os.path.join(REPO_ROOT, "outputs", "sweeps"),
                         help="Output directory")
     parser.add_argument("--experiment", default=None,
                         help="Aim experiment name (default: <sweep_name>_<timestamp>)")
@@ -354,7 +354,7 @@ def main():
 
     print(f"Output: {output_dir}\n")
     for i, var in enumerate(variations, 1):
-        run_dir = os.path.join(output_dir, var["name"])
+        run_dir = os.path.join(output_dir, experiment_name, var["name"])
         # Colored summary of overrides only
         colored_flags = []
         for ci, key in enumerate(var["combo"]):
@@ -375,7 +375,7 @@ def main():
         print("DRY RUN — commands that would be executed:")
         print(f"{'=' * 80}\n")
         for var in variations:
-            run_dir = os.path.join(output_dir, var["name"])
+            run_dir = os.path.join(output_dir, experiment_name, var["name"])
             cmd = build_cmd(base_config, var["overrides"], run_dir,
                             var["name"], extra_overrides)
             print(f"  {' '.join(cmd)}\n")

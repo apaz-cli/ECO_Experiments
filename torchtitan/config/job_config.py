@@ -75,7 +75,7 @@ class Profiling:
 
 @dataclass
 class Metrics:
-    log_freq: int = 10
+    log_freq: int = 1
     """How often to log metrics to TensorBoard, in iterations"""
 
     enable_tensorboard: bool = False
@@ -1015,7 +1015,7 @@ class ECO:
     and optimizer state dtypes.
     """
 
-    heuristic_log_freq: int = 100
+    heuristic_log_freq: int = 1
     """How often (in steps) to log heuristic validation metrics (e_t vs e_{t+1} comparison)."""
 
     stochastic_rounding: bool = False

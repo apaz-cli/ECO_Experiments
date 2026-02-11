@@ -30,14 +30,19 @@ eps = 1e-9
 enabled = true
 quantize_weights = true
 quant_dtype = "fp8"
-heuristic_log_freq = 10
+heuristic_log_freq = 1
 stochastic_rounding = false
+
+[lr_scheduler]
+warmup_steps = 4000
+decay_ratio = 0.2
+decay_type = "linear"
 
 [training]
 local_batch_size = 8
 seq_len = 2048
 max_norm = 1.0
-steps = 20
+steps = 20000
 dataset = "fineweb_edu_sample10bt"
 dataset_path = "/mnt/skraid0/fineweb"
 

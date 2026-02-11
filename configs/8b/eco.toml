@@ -69,7 +69,7 @@ components = ["model", "loss"]
 enabled = true
 quantize_weights = true
 quant_dtype = "fp8"
-heuristic_log_freq = 100
+heuristic_log_freq = 1
 stochastic_rounding = true
 
 [validation]

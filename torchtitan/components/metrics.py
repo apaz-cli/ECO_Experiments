@@ -188,10 +188,13 @@ class AimLogger(BaseLogger):
 
         self.tag = tag
 
-        # Use a shared Aim repository for all runs (not per-timestamp)
+        # Use a shared Aim repository for all runs (repo root, not CWD)
         aim_repo = os.getenv("AIM_REPO", None)
         if aim_repo is None:
-            aim_repo = ".aim"
+            aim_repo = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                ".aim",
+            )
 
         os.makedirs(aim_repo, exist_ok=True)
 

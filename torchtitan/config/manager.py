@@ -59,6 +59,14 @@ class ConfigManager:
 
         self._validate_config()
 
+        # Default job.description to config file stem if not explicitly set
+        if (
+            self.config.job.description == "default job"
+            and self.config.job.config_file
+        ):
+            stem = os.path.splitext(os.path.basename(self.config.job.config_file))[0]
+            self.config.job.description = stem
+
         return self.config
 
     def _maybe_load_toml(self, args: list[str]) -> dict[str, Any] | None:

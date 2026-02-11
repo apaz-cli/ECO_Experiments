@@ -20,7 +20,7 @@ chmod +x /tmp/eco/run_sweep.py
 echo "Installed runner wrappers in /tmp/eco/"
 
 # Set the Aim repository path (default to .aim at repo root)
-AIM_REPO="${AIM_REPO:-./.aim}"
+AIM_REPO="${AIM_REPO:-$REPO_DIR/.aim}"
 
 # Create Aim repository directory if it doesn't exist
 if [ ! -d "$AIM_REPO" ]; then
