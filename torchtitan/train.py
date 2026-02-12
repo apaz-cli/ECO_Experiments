@@ -274,7 +274,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         # build optimizer after applying parallelisms to the model
         eco_config = job_config.eco
         self.optimizers = self.train_spec.build_optimizers_fn(
-            self.model_parts, job_config.optimizer, parallel_dims, eco_config
+            self.model_parts, job_config.optimizer, parallel_dims, eco_config=eco_config
         )
         self.lr_schedulers = self.train_spec.build_lr_schedulers_fn(
             self.optimizers, job_config.lr_scheduler, job_config.training.steps

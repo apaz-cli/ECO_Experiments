@@ -393,10 +393,9 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
             finally:
                 # Always release GPU
                 gpu_q.put(gpu_id)
-            
+
             # Record result AFTER releasing GPU
-            with lock:
-                _record(run_name, success, elapsed, log_file, variation["combo"])
+            _record(run_name, success, elapsed, log_file, variation["combo"])
             return run_name, success, elapsed, log_file
 
         with ThreadPoolExecutor(max_workers=num_parallel) as executor:
