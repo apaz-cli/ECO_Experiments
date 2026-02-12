@@ -1,21 +1,21 @@
 #!/tmp/eco/run_config.sh
 
-# Master config for ECO experiments.
-# This is the base configuration for all scaling law experiments (100M-800M models).
-# Model-specific parameters (flavor, lr, steps, warmup_steps) should be overridden via CLI.
+# Muon ECO experiments configuration.
+# Tests ECO approaches for the Muon optimizer (Newton-Schulz momentum).
 #
-# Based on the ECO paper hyperparameters:
-#   - AdamW, beta1=0.9, beta2=0.98, eps=1e-9, wd=0.1, grad clip 1.0
-#   - LR scaling: 1.2e-3 * 50M/N_params (QUEST scaling law)
+# Based on ECO paper hyperparameters but adapted for Muon:
+#   - Muon optimizer with momentum=0.95, Newton-Schulz 5 iterations
+#   - Falls back to Adam for 1D params (biases, norms)
+#   - LR scaling: 3e-4 (typical Muon LR, ~4x lower than Adam)
 #   - Linear warmup (10% steps), cosine decay to 0.1x peak
 #   - T5 tokenizer (vocab=32100)
 #   - 100N tokens total, batch=512 seqs, seq_len=512
 #
-# Usage: Override model.flavor, optimizer.lr, lr_scheduler.warmup_steps, training.steps
+# Usage: Override model.flavor, eco.approach via CLI or sweep
 
 [job]
-dump_folder = "./outputs/experiment"
-description = "ECO experiment run"
+dump_folder = "./outputs/muon_experiment"
+description = "Muon ECO approach comparison"
 
 [profiling]
 enable_profiling = false
@@ -32,12 +32,13 @@ flavor = "100M"  # Override per experiment: 100M, 430M, etc.
 hf_assets_path = "./assets/tokenizers/t5-base"
 
 [optimizer]
-name = "ECOAdamW"
-lr = 6e-4  # Override per model size: 6e-4 for 100M, 1.5e-4 for 430M, etc.
-beta1 = 0.9
-beta2 = 0.98
-eps = 1e-9
-weight_decay = 0.1
+name = "ECOMuon"
+lr = 3e-4  # Muon typically uses lower LR than Adam
+momentum = 0.95
+beta1 = 0.9  # For 1D params (Adam fallback)
+beta2 = 0.999  # For 1D params (Adam fallback)
+eps = 1e-8
+weight_decay = 0.0  # Muon typically doesn't use weight decay
 
 [lr_scheduler]
 warmup_steps = 3815  # Override: 10% of total steps
@@ -71,11 +72,13 @@ enable = false
 components = ["model", "loss"]
 
 [eco]
-enabled = false
+enabled = true
+approach = "frobenius"  # ["pre_ns", "naive_sgdm", "frobenius", "jacobian"]
 quantize_weights = true
-quant_dtype = "bf16"
+quant_dtype = "fp8"
 heuristic_log_freq = 1
 stochastic_rounding = false
+master_weights_dtype = "none"  # ["none", "fp32", "bf16"] - none=pure ECO, fp32=baseline
 
 [validation]
 enable = false

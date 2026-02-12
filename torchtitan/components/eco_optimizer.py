@@ -63,6 +63,10 @@ class ECOAdamW(Optimizer):
             quant→dequant round-trip on regular params (default: True)
         quant_dtype: Quantization dtype string for simulated weight storage.
             'fp8' for FP8 E4M3, 'bf16' for bfloat16 baseline (default: 'bf16')
+        master_weights_dtype: Dtype for master weights buffer. None means no
+            master weights (pure ECO). torch.float32 or torch.bfloat16 creates
+            a separate high-precision copy (traditional quantized training).
+            (default: None)
     """
 
     def __init__(
@@ -79,6 +83,7 @@ class ECOAdamW(Optimizer):
         heuristic_log_freq: int = 0,
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
+        master_weights_dtype: torch.dtype | None = None,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -106,6 +111,7 @@ class ECOAdamW(Optimizer):
         self._heuristic_log_freq = heuristic_log_freq
         self._quantize_weights = quantize_weights
         self._quant_dtype = quant_dtype
+        self._master_weights_dtype = master_weights_dtype
         self._eco_step_count = 0
         # Accumulated heuristic metrics (consumed by get_eco_metrics)
         self._eco_metrics: dict[str, float] = {}
@@ -170,6 +176,16 @@ class ECOAdamW(Optimizer):
                     state["step"] = torch.tensor(0.0)
                     state["exp_avg"] = torch.zeros_like(param, dtype=optim_state_dtype)
                     state["exp_avg_sq"] = torch.zeros_like(param, dtype=optim_state_dtype)
+                    # Initialize master weights if requested
+                    if self._master_weights_dtype is not None:
+                        # Store original unquantized weights as initial master weights
+                        state["master_weights"] = param.detach().clone().to(self._master_weights_dtype)
+                        # Quantize param.data so the first forward pass uses quantized weights
+                        # (otherwise first forward uses unquantized, all others use quantized)
+                        if self._quantize_weights and param.dim() >= 2:
+                            param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
+                            theta_hat = self._requantize(param_f, self._quant_dtype, self._stochastic_rounding)
+                            param.data.copy_(theta_hat.to(param.dtype))
 
                 exp_avg = state["exp_avg"]
                 exp_avg_sq = state["exp_avg_sq"]
@@ -248,8 +264,18 @@ class ECOAdamW(Optimizer):
         should_log: bool,
         layer_metrics: dict[str, list[float]],
     ):
+        # Check if we're using master weights
+        state = self.state[param]
+        has_master_weights = "master_weights" in state
+
         # Work in optim_compute_dtype (FP32 by default) to avoid cancellation
-        param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
+        if has_master_weights:
+            # Start from master weights (high precision)
+            param_f = state["master_weights"].to(optim_compute_dtype) if state["master_weights"].dtype != optim_compute_dtype else state["master_weights"].clone()
+        else:
+            # Start from quantized param (pure ECO mode)
+            param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
+
         grad_compute = grad if grad.dtype == optim_compute_dtype else grad.to(optim_compute_dtype)
 
         if exp_avg.dtype == optim_compute_dtype:
@@ -309,8 +335,15 @@ class ECOAdamW(Optimizer):
             exp_avg.copy_(exp_avg_c.to(exp_avg.dtype))
             exp_avg_sq.copy_(exp_avg_sq_c.to(exp_avg_sq.dtype))
 
-        # 4. Store θ_hat back into param (the weight now holds the FP8-representable value)
-        param.data.copy_(theta_hat.to(param.dtype))
+        # 4. Store results
+        if has_master_weights:
+            # Store θ̃ (pre-quantization) to master weights
+            state["master_weights"].copy_(param_f.to(state["master_weights"].dtype))
+            # Store θ̂ (quantized) to param
+            param.data.copy_(theta_hat.to(param.dtype))
+        else:
+            # Pure ECO mode: only store θ̂ to param
+            param.data.copy_(theta_hat.to(param.dtype))
 
     # ------------------------------------------------------------------
     # ECO-aware AdamW (QuantizedTensor params)

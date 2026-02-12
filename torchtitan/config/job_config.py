@@ -148,6 +148,9 @@ class Optimizer:
     beta2: float = 0.95
     """Exponential moving average hyperparameters to use"""
 
+    momentum: float = 0.95
+    """Momentum coefficient for Muon optimizer (only used when optimizer.name="ECOMuon")"""
+
     eps: float = 1e-8
     """Epsilon value to use"""
 
@@ -1046,6 +1049,39 @@ class ECO:
     """
     Quantization dtype for simulated weight storage.
     Options: "fp8" (FP8 E4M3), "bf16" (bfloat16, effectively baseline). Default is "bf16".
+    """
+
+    activation_dtype: str = "none"
+    """
+    Quantization format for activations in QuantizedLinear forward pass.
+    Options: "none" (no activation quantization), "fp8" (FP8 E4M3).
+    Default is "none".
+
+    When set to "fp8", activations are quantized to FP8 E4M3 during forward pass.
+    This matches the paper's setup: "quantizes both weights and activations to FP8 E4M3".
+    Requires using QuantizedLinear layers (via model converter).
+    """
+
+    approach: str = "frobenius"
+    """
+    ECO injection approach for ECOMuon optimizer.
+    Options: "pre_ns" (inject before Newton-Schulz), "naive_sgdm" (SGDM formula),
+    "frobenius" (Frobenius norm scaling), "jacobian" (exact Jacobian-based).
+    Default is "frobenius". Only applies to ECOMuon; ignored by ECOAdamW.
+    """
+
+    master_weights_dtype: str | None = None
+    """
+    Dtype for master weights (separate high-precision copy of parameters).
+    Options: None (no master weights, pure ECO), "fp32", "bf16".
+
+    - None: ECO paper mode - no master weights, error compensation only
+    - "fp32": Traditional quantized training - FP32 master weights baseline
+    - "bf16": BF16 master weights (intermediate memory)
+
+    When set, a separate master weights buffer is stored in optimizer state and
+    updated in high precision. The quantized param is derived from master weights.
+    Default is None (no master weights).
     """
 
 

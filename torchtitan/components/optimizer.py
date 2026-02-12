@@ -22,6 +22,7 @@ from torch.optim import Optimizer
 
 from torchtitan.components.ft import FTManager, has_torchft
 from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_muon import ECOMuon
 from torchtitan.config import JobConfig, Optimizer as OptimizerConfig
 from torchtitan.distributed import ParallelDims
 
@@ -30,6 +31,7 @@ __all__ = [
     "build_optimizers",
     "build_optimizers_with_moe_load_balancing",
     "ECOAdamW",
+    "ECOMuon",
 ]
 
 
@@ -319,6 +321,7 @@ def build_optimizers(
         "Adam": torch.optim.Adam,
         "AdamW": torch.optim.AdamW,
         "ECOAdamW": ECOAdamW,
+        "ECOMuon": ECOMuon,
     }
     if name not in optimizer_classes:
         raise NotImplementedError(f"Optimizer {name} not added.")
@@ -347,6 +350,49 @@ def build_optimizers(
             optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
             optimizer_kwargs["quantize_weights"] = eco_config.quantize_weights
             optimizer_kwargs["quant_dtype"] = eco_config.quant_dtype
+            # Master weights dtype (None, fp32, or bf16)
+            mw_dtype_str = getattr(eco_config, "master_weights_dtype", None)
+            if mw_dtype_str is not None and mw_dtype_str.lower() != "none":
+                optimizer_kwargs["master_weights_dtype"] = dtype_map.get(mw_dtype_str.lower(), None)
+            else:
+                optimizer_kwargs["master_weights_dtype"] = None
+
+    # ECOMuon handles dtype internally, remove fused/foreach flags
+    if name == "ECOMuon":
+        optimizer_kwargs.pop("fused", None)
+        optimizer_kwargs.pop("foreach", None)
+
+        # Muon-specific hyperparameters
+        optimizer_kwargs["momentum"] = getattr(optimizer_config, "momentum", 0.95)
+        optimizer_kwargs["ns_steps"] = 5
+        optimizer_kwargs["adam_betas"] = (beta1, beta2)  # For 1D params
+        optimizer_kwargs["adam_eps"] = eps
+
+        # Add dtype and ECO configuration from eco_config if available
+        if eco_config is not None:
+            dtype_map = {
+                "fp32": torch.float32,
+                "bf16": torch.bfloat16,
+                "fp16": torch.float16,
+            }
+            optimizer_kwargs["optim_state_dtype"] = dtype_map.get(
+                eco_config.optim_state_dtype.lower(), torch.float32
+            )
+            optimizer_kwargs["optim_compute_dtype"] = dtype_map.get(
+                eco_config.optim_compute_dtype.lower(), torch.float32
+            )
+            optimizer_kwargs["eco_enabled"] = eco_config.enabled
+            optimizer_kwargs["eco_approach"] = getattr(eco_config, "approach", "frobenius")
+            optimizer_kwargs["stochastic_rounding"] = eco_config.stochastic_rounding
+            optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
+            optimizer_kwargs["quantize_weights"] = eco_config.quantize_weights
+            optimizer_kwargs["quant_dtype"] = eco_config.quant_dtype
+            # Master weights dtype (None, fp32, or bf16)
+            mw_dtype_str = getattr(eco_config, "master_weights_dtype", None)
+            if mw_dtype_str is not None and mw_dtype_str.lower() != "none":
+                optimizer_kwargs["master_weights_dtype"] = dtype_map.get(mw_dtype_str.lower(), None)
+            else:
+                optimizer_kwargs["master_weights_dtype"] = None
 
     if optim_in_bwd:
         return OptimizersInBackwardContainer(

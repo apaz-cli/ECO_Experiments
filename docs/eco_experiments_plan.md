@@ -467,9 +467,9 @@ W_{t+1} = W_t − η · u_{t+1}                 # update
 Muon applies only to 2D parameters (weight matrices). For 1D parameters (biases,
 norms, embeddings), a standard Adam optimizer is used.
 
-### 5.2 Derivation
+### 5.2 Four ECO Approaches for Muon
 
-**Step 1: SGDM ECO recap.** For SGDM (θ ← θ − η·m), the paper derives the exact
+**Background: SGDM ECO.** For SGDM (θ ← θ − η·m), the paper derives the exact
 injection (Appendix A, paper lines 583–592) by constructing implicit master weights
 θ* = θ̂ + e and implicit momentum m* = m̂ + (1/(ηβ))·e, and showing these follow
 the standard SGDM recurrence. The approximate (memory-free) injection is:
@@ -481,70 +481,93 @@ the standard SGDM recurrence. The approximate (memory-free) injection is:
 This works because the update θ ← θ − η·m is **linear** in m: injecting Δm into m
 produces a correction of −η·Δm in θ.
 
-**Step 2: Why Muon breaks the SGDM derivation.** For Muon, the update is
-θ ← θ − η·NS(m), which is **nonlinear** in m. The virtual sequence construction
-requires θ* − C·m* to follow gradient descent, but NS prevents the error terms from
-canceling cleanly (the cancellation in the SGDM proof relies on linearity; see paper
-lines 706–726 where the e_{t+1} coefficient vanishes *because* the update is linear in m).
+**Why Muon is Different.** For Muon, the update is θ ← θ − η·NS(m), which is
+**nonlinear** in m. The virtual sequence construction requires θ* − C·m* to follow
+gradient descent, but NS prevents the error terms from canceling cleanly (the
+cancellation in the SGDM proof relies on linearity; see paper lines 706–726 where the
+e_{t+1} coefficient vanishes *because* the update is linear in m).
 
-**Step 3: What exact compensation would require.** For the implicit master weights to
-match, we need (from the same logic as the SGDM proof):
+We implement **four approaches** to handle this nonlinearity:
 
+#### Approach 1: Pre-Newton-Schulz Injection (Simplest — Try This First)
 ```
-NS(m*_{t+1}) = NS(m̃_{t+1}) + e_t/η
+m ← m + (1/η)(1 − 1/β)·e  (inject BEFORE NS)
+u = NS(m)                  (then apply NS to error-corrected momentum)
+θ̂ ← q(θ̃ - η·u)
 ```
 
-i.e., the orthogonalized implicit momentum must differ from the ECO orthogonalized
-momentum by exactly e_t/η. Linearizing NS around m̃:
+Injects error into momentum **before** applying Newton-Schulz, rather than trying to
+invert the NS transformation. The error goes through the same nonlinear transformation
+as the gradient. Philosophically different: instead of compensating for NS, we let NS
+naturally process the error.
+
+**Why try this first:** The math doesn't quite add up (the error should be injected
+after NS to match the paper's exact derivation), but it's the simplest approach and
+might just work. If momentum is slowly varying and NS is approximately linear locally,
+pre-injection might be "close enough" to exact compensation. Worth testing before
+getting fancy.
+
+#### Approach 2: Naive SGDM (Baseline Control)
+```
+Δm = (1/η)(1 − 1/β) · e
+```
+Directly applies the SGDM formula, completely ignoring Newton-Schulz nonlinearity.
+Serves as a control to measure how much the nonlinearity matters.
+
+#### Approach 3: Frobenius Norm Scaling (Primary Method)
+```
+Δm = (‖m̃_{t+1}‖_F / η)(1 − 1/β) · e_{t+1}
+```
+
+**Derivation:** For exact compensation, we need NS(m*_{t+1}) = NS(m̃_{t+1}) + e_t/η.
+Linearizing NS around m̃:
 
 ```
 NS(m̃ + Δm) ≈ NS(m̃) + J_NS(m̃) · Δm
 ```
 
-where J_NS is the Fréchet derivative of the polar factor map. So we need:
+where J_NS is the Fréchet derivative of the polar factor map. We need:
 
 ```
 J_NS(m̃) · Δm = e_t/η
 ```
 
-This requires inverting J_NS, which is problematic:
-- J_NS is **singular**: perturbations to m that only scale its singular values (without
-  rotating singular vectors) produce zero change in NS(m), because the polar factor UVᵀ
-  is invariant to singular value scaling. So J_NS has a nontrivial null space.
-- The full Fréchet derivative of the polar factor involves the singular value
-  decomposition and is expensive to compute.
+Computing J_NS exactly is problematic:
+- J_NS is **singular**: perturbations that only scale singular values produce zero
+  change in NS(m), since the polar factor UVᵀ is invariant to singular value scaling.
+- The full Fréchet derivative involves SVD and is expensive.
 
-**Step 4: Practical approximation.** NS begins by normalizing m → m/‖m‖_F, then
-iterates toward UVᵀ. For the first-order effect, NS maps a perturbation Δm to
-approximately Δm/‖m‖_F (after projecting out the component along m's dominant singular
-directions, which NS is insensitive to). Since the quantization error e is effectively
-random with respect to m's singular structure, most of e lies outside the null space of
-J_NS, and the effective gain is ≈ 1/‖m‖_F.
+**Practical approximation:** NS begins by normalizing m → m/‖m‖_F, then iterates toward
+UVᵀ. For first-order effects, NS maps a perturbation Δm to approximately Δm/‖m‖_F
+(after projecting out components along m's null space). Since the quantization error e
+is effectively random with respect to m's singular structure, most of e lies outside
+the null space, and the effective gain is ≈ 1/‖m‖_F.
 
-To achieve the SGDM-equivalent correction in the update direction, we compensate for
-this gain by multiplying by ‖m‖_F:
+To achieve the SGDM-equivalent correction, we compensate for this gain by multiplying
+by ‖m‖_F. This is the **Adam analogy**: just as Adam scales error injection by
+(√v + ε) to convert from update-space to momentum-space, we scale by ‖m‖_F to account
+for how NS transforms momentum.
+
+**Limitations:**
+- NS is not just division by ‖m‖_F — it does full spectral normalization
+- Components of e aligned with dominant singular vectors will be suppressed regardless
+- The e_t ≈ e_{t+1} approximation adds further error
+
+#### Approach 4: Jacobian-Based (Exact)
+```
+Solve: J_NS(m̃) · Δm ≈ e/η
+```
+
+Uses finite differences to approximate the Jacobian J_NS = ∂NS(m)/∂m:
 
 ```
-Δm = (‖m̃_{t+1}‖_F / η)(1 − 1/β) · e_{t+1}
+J·v ≈ [NS(m + εv) - NS(m - εv)] / (2ε)
 ```
 
-**This is the proposed ECO-Muon injection formula.** The ‖m‖_F factor plays the
-analogous role to Adam's (√v + ε) factor — it converts from update-space back to
-momentum-space, accounting for how the optimizer transforms momentum before applying it
-as an update.
-
-Computing ‖m‖_F is a single reduction (negligible cost).
-
-**Step 5: Limitations of this derivation.**
-- NS is not a simple division by ‖m‖_F — it does full spectral normalization. The
-  ‖m‖_F scaling is a scalar approximation of a matrix-valued operation.
-- Components of e aligned with the dominant singular vectors of m will be suppressed by
-  NS regardless of the scaling. For low-rank momentum (which is typical), this means a
-  small fraction of the error correction is lost each step.
-- The e_t ≈ e_{t+1} approximation adds further error on top.
-
-Whether these approximations are tolerable is an empirical question — hence the
-experiment.
+Then solves the linear system using conjugate gradient (initialized with the naive SGDM
+injection as a warm start). This is the **mathematically exact** approach, but
+expensive: each CG iteration requires two NS evaluations (10 Newton-Schulz iterations
+total). Serves as an upper bound on achievable performance.
 
 ### 5.3 Experimental Setup
 
@@ -552,39 +575,59 @@ experiment.
 
 **Conditions:**
 
-| Run | Optimizer | ECO | Formula |
-|-----|-----------|-----|---------|
-| Muon baseline | Muon | No | — |
+| Run | Optimizer | ECO | Approach |
+|-----|-----------|-----|----------|
+| Muon baseline (w/ MW) | Muon | No | — |
 | Muon naive (no MW, no ECO) | Muon | No | — |
-| Muon ECO-A (naive SGDM) | Muon | Yes | Δm = (1/η)(1−1/β)·e |
-| Muon ECO-B (Frobenius) | Muon | Yes | Δm = (‖m‖_F/η)(1−1/β)·e |
-| Adam baseline | Adam | No | — |
+| Muon ECO (pre_ns) | Muon | Yes | Inject before NS |
+| Muon ECO (naive_sgdm) | Muon | Yes | Δm = (1/η)(1−1/β)·e |
+| Muon ECO (frobenius) | Muon | Yes | Δm = (‖m‖_F/η)(1−1/β)·e |
+| Muon ECO (jacobian) | Muon | Yes | Solve J·Δm = e/η via CG |
+| Adam baseline (w/ MW) | Adam | No | — |
 | Adam ECO | Adam | Yes | Paper formula (Alg. 3) |
 
-ECO-A is the control: what happens if we just apply the SGDM formula and ignore NS.
-ECO-B is the derived formula. Comparing A vs B isolates the effect of the ‖m‖_F scaling.
+**Comparisons:**
+- **naive vs no-ECO**: Does any error compensation help?
+- **pre_ns vs naive_sgdm**: Does injecting before NS help?
+- **naive_sgdm vs frobenius**: Does the ‖m‖_F scaling matter?
+- **frobenius vs jacobian**: How much better can exact Jacobian do?
+- **Best Muon+ECO vs Adam+ECO**: Cross-optimizer comparison
 
-### 5.4 Implementation
+### 5.4 Implementation (**DONE**)
 
-**Adding Muon to torchtitan:**
-- Add `"Muon": torch.optim.Muon` to `optimizer_classes` in
-  `torchtitan/components/optimizer.py`.
-- Add Muon-specific config fields to `torchtitan/config/job_config.py` (momentum, NS
-  steps, etc.).
-- Muon uses Adam for 1D params (biases, norms) — handle this in the optimizer builder
-  by splitting parameters by dimensionality.
+**ECOMuon optimizer:** `torchtitan/components/eco_muon.py`
+- Standalone optimizer similar to ECOAdamW
+- 2D params: Muon with Newton-Schulz5 (`zeropower_via_newtonschulz5`)
+- 1D params: Falls back to Adam
+- Four approaches selectable via `eco_approach` argument:
+  - `"naive_sgdm"`, `"frobenius"`, `"jacobian"`, `"pre_ns"`
+- Same dtype support as ECOAdamW (`optim_state_dtype`, `optim_compute_dtype`)
+- Same quantization support (`quantize_weights`, `quant_dtype`)
+- Logs all ECOAdamW heuristics plus Muon-specific metrics:
+  - `eco/muon/frobenius_norm` — ‖m‖_F per layer
+  - `eco/muon/update_norm` — ‖u‖ (NS output)
+  - `eco/muon/injection_scale` — injection coefficient magnitude
 
-**ECO-Muon injection:** Add Muon-specific injection to the ECO optimizer. The Muon
-optimizer state has `momentum_buffer` (not `exp_avg`/`exp_avg_sq` like Adam). The
-injection targets this buffer.
+**Integration TODO:**
+- Add `"ECOMuon"` to `optimizer_classes` in `torchtitan/components/optimizer.py`
+- Add Muon config dataclass to `torchtitan/config/job_config.py`
+- Wire ECOMuon config into `build_optimizers`
+- Create config files: `configs/debug/muon.toml`, `configs/experiments/muon_*.toml`
+- Create sweep: `sweeps/muon_eco.py` to test all four approaches
 
 ### 5.5 What to Measure
 
-- **Primary:** Does ECO-B prevent the 1/η divergence that naive master-weight removal
-  causes? (Compare "Muon naive" vs "Muon ECO-B".)
-- **Secondary:** How does ECO-B compare to ECO-A? Does the ‖m‖_F scaling matter?
-- **Heuristic validation:** Same 4 metrics as Section 1.5. Additionally, log ‖m‖_F per
-  layer over training to understand the scaling factor's dynamics.
+- **Primary:** Does ECO (any approach) prevent the 1/η divergence that naive
+  master-weight removal causes? (Compare "naive no-ECO" vs all ECO approaches.)
+- **Approach comparison:**
+  - Does `frobenius` beat `naive_sgdm`? (Does ‖m‖_F scaling matter?)
+  - Does `jacobian` beat `frobenius`? (Is exact Jacobian worth the cost?)
+  - Does `pre_ns` beat `frobenius`? (Pre-NS vs post-NS philosophy?)
+- **Heuristic validation:** Same metrics as ECOAdamW:
+  - `eco/heuristic/norm_ratio` — ‖e_{t+1}‖ / ‖e_t‖
+  - `eco/heuristic/cosine_sim` — cos(e_t, e_{t+1})
+  - `eco/heuristic/rel_diff_norm` — ‖e_{t+1} - e_t‖ / ‖e_t‖
+  - Plus Muon-specific: ‖m‖_F, ‖u‖, injection scale dynamics
 - **Cross-optimizer:** How does the best Muon+ECO compare to Adam+ECO?
 
 ---

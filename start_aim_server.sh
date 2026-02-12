@@ -29,7 +29,6 @@ if [ ! -d "$AIM_REPO" ]; then
 fi
 
 # Check if Aim repository needs initialization
-# An initialized Aim repo has a meta directory inside it
 if [ ! -d "$AIM_REPO/meta" ]; then
     echo "Initializing Aim repository at $AIM_REPO"
     aim init --repo "$AIM_REPO" --yes

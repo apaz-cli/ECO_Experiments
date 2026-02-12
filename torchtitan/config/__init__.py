@@ -17,6 +17,7 @@ from .job_config import (
     Checkpoint,
     Comm,
     Debug,
+    ECO,
     FaultTolerance,
     Job,
     JobConfig,
@@ -51,4 +52,5 @@ __all__ = [
     "Training",
     "Validation",
     "Debug",
+    "ECO",
 ]

@@ -98,22 +98,32 @@ class QuantizedLinear(nn.Module):
         )
     
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-        
+        """Forward pass with optional activation quantization.
+
         Args:
             input: Input tensor (will be cast to compute_dtype)
-            
+
         Returns:
             Output tensor in compute_dtype
         """
         # Ensure input is in compute dtype
         if input.dtype != self.compute_dtype:
             input = input.to(self.compute_dtype)
-        
-        # Standard linear operation
+
         # Dequantize weight with gradient tracking
         weight_fp = self._weight_data.to(self.compute_dtype) * self._weight_scale
-        output = F.linear(input, weight_fp, self.bias)
+
+        # Quantize activations if requested
+        if self.activation_quant_dtype is not None:
+            # Quantize input to specified dtype
+            input_quant = QuantizedTensor.quantize(input, quant_dtype=self.activation_quant_dtype)
+            # Dequantize for computation (in future, use native FP8 GEMM here)
+            input_dequant = input_quant.dequantize()
+            output = F.linear(input_dequant, weight_fp, self.bias)
+        else:
+            # Standard BF16 matmul
+            output = F.linear(input, weight_fp, self.bias)
+
         return output
     
     def extra_repr(self) -> str:

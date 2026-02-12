@@ -13,11 +13,11 @@ Dtype Settings Reference
 - Default: bf16
 - Note: bf16 serves as the baseline (same code path, no quantization loss). fp8 matches "FP8 E4M3" from Table 1.
 
-3. Activation Dtype (eco.activation_dtype) 
+3. Activation Dtype (eco.activation_dtype)
 - Purpose: Quantization format for activations in QuantizedLinear.forward()
-- Options: none, fp8_e4m3, fp8_e5m2
-- Default: fp8_e4m3
-- Paper: Matches "weights and activations to FP8 E4M3" from Section 4.2
+- Options: none, fp8
+- Default: none
+- Paper: When set to "fp8", matches "weights and activations to FP8 E4M3" from Section 4.2
 
 4. Optimizer State Dtype (eco.optim_state_dtype)
 - Purpose: Storage for Adam's first/second moments (m, v)
@@ -31,10 +31,10 @@ Dtype Settings Reference
 - Default: fp32
 - Critical: Paper recommends FP32 to avoid catastrophic cancellation when computing quantization error
 
-Paper Configuration (Default)
+Paper Configuration
 training.dtype = float32
 eco.quant_dtype = fp8                # 1 byte/param
-eco.activation_dtype = fp8_e4m3     # Activations quantized
+eco.activation_dtype = fp8          # Activations quantized to FP8 E4M3
 eco.optim_state_dtype = fp32        # 4+4 bytes/param
 eco.optim_compute_dtype = fp32      # Error in FP32
 Total: 9 bytes/param (vs 12 with master weights)
