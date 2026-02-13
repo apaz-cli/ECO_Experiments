@@ -18,13 +18,14 @@ from torchtitan.distributed import ParallelDims
 
 def test_activation_dtype_config_parsing():
     """Test that activation_dtype config is parsed correctly."""
-    from torchtitan.config import ECO
+    from torchtitan.config import JobConfig
 
     # Test default
-    eco = ECO()
-    assert eco.activation_dtype == "none"
+    config = JobConfig()
+    assert config.eco.activation_dtype == "none"
 
-    # Test setting values
+    # Test setting values via dataclass
+    from torchtitan.config.job_config import ECO
     eco_fp8 = ECO(activation_dtype="fp8")
     assert eco_fp8.activation_dtype == "fp8"
 

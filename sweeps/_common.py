@@ -44,6 +44,6 @@ AC_MODE = {
 # Bundle for convenience — unpack with **SPEED_OPTIONS
 SPEED_OPTIONS = {
     "local_batch_size": LOCAL_BATCH_SIZE,
-    "compile": COMPILE,
+    #"compile": COMPILE, # Does not fail fast enough to be faster :(
     "ac_mode": AC_MODE,
 }

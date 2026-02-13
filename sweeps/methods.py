@@ -28,8 +28,8 @@ BASE_CONFIG = "configs/experiments/master.toml"
 TREATMENTS = {
     "bf16":       (False, "bf16", None, False, "bf16"),
     "bf16_eco":   (True,  "bf16", None, False, "bf16"),
-    "fp8_eco":    (True,  "fp8",  None, True,  "fp8"),  # ECO with RTN
-    "fp8_mw_sr":  (False, "fp8",  "fp32", True,  "fp8"),  # FP32 master weights + SR baseline
+    "fp8_mw":     (False, "fp8",  "fp32", True,  "fp8"),  # FP32 master weights + SR baseline
+    "fp8_eco":    (True,  "fp8",  None, True,  "fp8"),    # ECO
 }
 
 OPTIONS = {
