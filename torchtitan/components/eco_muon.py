@@ -129,6 +129,7 @@ class ECOMuon(Optimizer):
         quant_dtype: str = "bf16",
         jacobian_fd_eps: float = 1e-5,
         master_weights_dtype: torch.dtype | None = None,
+        include_weight_decay_in_injection: bool = True,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -168,6 +169,7 @@ class ECOMuon(Optimizer):
         self._quant_dtype = quant_dtype
         self._jacobian_fd_eps = jacobian_fd_eps
         self._master_weights_dtype = master_weights_dtype
+        self._include_weight_decay_in_injection = include_weight_decay_in_injection
         self._eco_step_count = 0
         self._eco_metrics: dict[str, float] = {}
 
@@ -376,12 +378,16 @@ class ECOMuon(Optimizer):
             if self._eco_approach == "naive_sgdm":
                 # Approach 1: Ignore Newton-Schulz nonlinearity
                 injection_coeff = (1.0 / lr) * (1.0 - 1.0 / momentum)
+                if self._include_weight_decay_in_injection and weight_decay != 0:
+                    injection_coeff *= (1.0 - lr * weight_decay)
                 delta_m = injection_coeff * error
 
             elif self._eco_approach == "frobenius":
                 # Approach 2: Scale by Frobenius norm
                 m_norm = m_tilde.norm(p='fro')
                 injection_coeff = (m_norm / lr) * (1.0 - 1.0 / momentum)
+                if self._include_weight_decay_in_injection and weight_decay != 0:
+                    injection_coeff *= (1.0 - lr * weight_decay)
                 delta_m = injection_coeff * error
 
                 if should_log:
@@ -398,6 +404,8 @@ class ECOMuon(Optimizer):
                 # Approach 4: Inject before Newton-Schulz
                 # We need to re-do the update with injected momentum
                 injection_coeff = (1.0 / lr) * (1.0 - 1.0 / momentum)
+                if self._include_weight_decay_in_injection and weight_decay != 0:
+                    injection_coeff *= (1.0 - lr * weight_decay)
                 delta_m = injection_coeff * error
 
                 # Inject into momentum BEFORE NS
@@ -589,6 +597,7 @@ class ECOMuon(Optimizer):
         lr: float,
         momentum: float,
         ns_steps: int,
+        weight_decay: float = 0.0,
     ) -> torch.Tensor:
         """Compute Δm such that η·J·Δm ≈ e where J = ∂NS(m)/∂m.
 
@@ -598,6 +607,10 @@ class ECOMuon(Optimizer):
         # Target: η·J·Δm = e
         # So we want: J·Δm = e/η
         target = error / lr
+        wd_factor = 1.0
+        if self._include_weight_decay_in_injection and weight_decay != 0:
+            wd_factor = 1.0 - lr * weight_decay
+        target *= wd_factor
 
         # Define Jacobian-vector product using finite differences
         def jvp(v):
@@ -612,6 +625,7 @@ class ECOMuon(Optimizer):
         # Solve J·Δm = target using conjugate gradient
         # Start with naive SGDM injection as initial guess
         delta_m = (1.0 / lr) * (1.0 - 1.0 / momentum) * error
+        delta_m *= wd_factor
 
         # CG iterations
         r = target - jvp(delta_m)  # residual

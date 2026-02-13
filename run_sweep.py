@@ -21,7 +21,6 @@ OPTIONS:
     -g [N], --gpus [N]      Number of GPUs (0 = all visible, default = 1)
     -j N, --jobs-per-gpu N  Concurrent jobs per GPU (default: 1)
     --dry-run               Print commands without execution
-    --sweep-log <file>      Log file for sweep output (plain text, no colors)
     --                      Pass extra arguments to every training run
 
 SWEEP FILE FORMAT:
@@ -33,16 +32,24 @@ SWEEP FILE FORMAT:
                 "flags": {value: [list of CLI flags], ...},
                 "name": "short_name",
                 "monotonic": "increasing"|"decreasing"|None (optional),
+                "singular": bool (optional),
             },
             ...
         }
+
+    Optionally, a sweep file may define:
+        def EXCLUDE(combo: dict) -> bool:
+            "Return True to exclude this combination from the sweep."
+            ...
+
     See docs/sweep_configuration.md for details.
 
-MONOTONIC SKIPPING:
-    If an option is marked monotonic and a run fails, subsequent runs with
-    larger (or smaller, depending on direction) values in that dimension
-    (with all other settings identical) will be skipped. Only works in
-    sequential execution (parallel mode records failures but does not skip).
+MONOTONIC & SINGULAR SKIPPING:
+    - Monotonic: If a run fails, skip worse values (skip on failure)
+    - Singular: If a run succeeds, skip all other values (skip on success)
+    Singular dimensions are sorted first in the cartesian product (vary slowest)
+    so other dimensions are explored while finding the right singular value.
+    Only works in sequential mode (parallel mode records but doesn't skip dynamically).
 
 EXAMPLES:
     python run_sweep.py --sweep beta --base_config configs/scaling_law/100m_eco.toml
@@ -123,7 +130,9 @@ def load_sweeps():
     """Import all .py files in sweeps/ and collect their OPTIONS and BASE_CONFIG."""
     sweeps = {}
     sweep_dir = Path(__file__).parent / "sweeps"
-    for f in sorted(sweep_dir.glob("*.py")):
+    if str(sweep_dir) not in sys.path:
+        sys.path.insert(0, str(sweep_dir))
+    for f in sorted(sweep_dir.glob("[!_]*.py")):
         spec = importlib.util.spec_from_file_location(f.stem, f)
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not load sweep file: {f}")
@@ -132,6 +141,7 @@ def load_sweeps():
         sweeps[f.stem] = {
             "options": mod.OPTIONS,
             "base_config": getattr(mod, "BASE_CONFIG", None),
+            "exclude": getattr(mod, "EXCLUDE", None),
         }
     return sweeps
 
@@ -139,21 +149,27 @@ def load_sweeps():
 def load_sweep_file(path):
     """Load a single sweep .py file and return (name, options, base_config)."""
     path = Path(path)
+    sweep_dir = str(path.parent)
+    if sweep_dir not in sys.path:
+        sys.path.insert(0, sweep_dir)
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load sweep file: {path}")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return path.stem, mod.OPTIONS, getattr(mod, "BASE_CONFIG", None)
+    return path.stem, mod.OPTIONS, getattr(mod, "BASE_CONFIG", None), getattr(mod, "EXCLUDE", None)
 
 
-def should_skip_config(current_combo, failed_combos, options):
+def should_skip_config(current_combo, failed_combos, succeeded_combos, options):
     """
-    Skip configs based on monotonicity rules: if an option is marked monotonic
-    and a smaller value already failed (with all other settings identical), skip.
+    Skip configs based on monotonicity and singular rules:
+    - Monotonic: if an option marked monotonic failed at some value, skip worse values
+    - Singular: if an option marked singular succeeded at some value, skip all other values
+
     Direction 'increasing' means failure likelihood increases with value index;
     'decreasing' means failure likelihood decreases with value index.
     """
+    # Check monotonic (skip on failure)
     for failed_combo in failed_combos:
         for key, opt in options.items():
             monotonic = opt.get("monotonic")
@@ -181,42 +197,121 @@ def should_skip_config(current_combo, failed_combos, options):
             except (ValueError, TypeError):
                 continue
 
+    # Check singular (skip on success)
+    for succeeded_combo in succeeded_combos:
+        for key, opt in options.items():
+            if not opt.get("singular"):
+                continue
+
+            other_dims_match = all(
+                succeeded_combo.get(k) == current_combo.get(k)
+                for k in options
+                if k != key
+            )
+            if not other_dims_match:
+                continue
+
+            # Skip if this is a different value in the singular dimension
+            if succeeded_combo.get(key) != current_combo.get(key):
+                return True
+
     return False
 
 
-def generate_variations(sweep_name, options):
-    """Generate all config variations for a sweep by taking the cartesian product."""
-    variations = []
-    keys = list(options.keys())
+def count_expected_runs(options):
+    """
+    Count expected runs treating singular dimensions as contributing only 1 value.
+    This gives a realistic estimate since we expect to find one working value and skip the rest.
+    """
+    count = 1
+    for opt in options.values():
+        if opt.get("singular"):
+            count *= 1  # Only expect one successful value
+        else:
+            count *= len(opt["values"])
+    return count
+
+
+def _diagonal_product(keys, options):
+    """Generate cartesian product of singular keys sorted by sum of value indices.
+
+    This advances all singular dimensions at roughly the same rate, so e.g.
+    local_batch_size and compile are both probed early rather than one being
+    fully exhausted before the other is touched.
+    """
     value_lists = [options[k]["values"] for k in keys]
+    index_lists = [range(len(v)) for v in value_lists]
 
-    for combination in itertools.product(*value_lists):
-        name_parts = []
-        overrides = []
-        combo_dict = dict(zip(keys, combination))
+    combos = []
+    for indices in itertools.product(*index_lists):
+        values = tuple(value_lists[i][idx] for i, idx in enumerate(indices))
+        combos.append((sum(indices), indices, values))
 
-        for key, value in zip(keys, combination):
-            opt = options[key]
-            flags = opt["flags"].get(value, [])
-            overrides.extend(flags)
+    combos.sort()  # by sum, then lexicographic tiebreak on indices
+    return [values for _, _, values in combos]
 
-            if isinstance(value, bool):
-                name_parts.append(f"{opt['name']}{'T' if value else 'F'}")
-            else:
-                name_parts.append(f"{opt['name']}{value}")
 
-        base_name = "_".join(name_parts) if name_parts else "default"
-        variations.append({
-            "name": f"ECO_{sweep_name}_{base_name}",
-            "overrides": overrides,
-            "combo": combo_dict,
-        })
+def generate_variations(sweep_name, options, exclude_fn=None):
+    """Generate all config variations for a sweep.
+
+    Non-singular dimensions are enumerated lexicographically (outermost).
+    Singular dimensions are enumerated in diagonal order (innermost, by sum
+    of value indices) so they all advance at roughly the same rate and get
+    resolved in the first few runs.
+
+    Args:
+        exclude_fn: Optional callable(combo_dict) -> bool. If it returns True,
+                    that combination is excluded from the sweep.
+    """
+    variations = []
+
+    # Split into lexicographic (non-singular) and diagonal (singular) groups
+    lex_keys = sorted(k for k in options if not options[k].get("singular", False))
+    diag_keys = sorted(k for k in options if options[k].get("singular", False))
+    all_keys = lex_keys + diag_keys
+
+    lex_value_lists = [options[k]["values"] for k in lex_keys]
+    lex_combos = list(itertools.product(*lex_value_lists)) if lex_keys else [()]
+    diag_combos = _diagonal_product(diag_keys, options) if diag_keys else [()]
+
+    for lex_values in lex_combos:
+        for diag_values in diag_combos:
+            combination = lex_values + diag_values
+            combo_dict = dict(zip(all_keys, combination))
+
+            if exclude_fn is not None and exclude_fn(combo_dict):
+                continue
+
+            name_parts = []
+            overrides = []
+
+            for key, value in zip(all_keys, combination):
+                opt = options[key]
+                flags = opt["flags"].get(value, [])
+                overrides.extend(flags)
+
+                if opt.get("name") is None:
+                    continue
+                if isinstance(value, bool):
+                    name_parts.append(f"{opt['name']}{'T' if value else 'F'}")
+                else:
+                    name_parts.append(f"{opt['name']}{value}")
+
+            base_name = "_".join(name_parts) if name_parts else "default"
+            variations.append({
+                "name": f"ECO_{sweep_name}_{base_name}",
+                "overrides": overrides,
+                "combo": combo_dict,
+            })
 
     return variations
 
 
 def validate_options(options):
-    """Validate OPTIONS dictionary structure."""
+    """
+    Validate OPTIONS dictionary structure.
+    Expands string flags shorthand to full dict format.
+    """
     if not isinstance(options, dict):
         raise ValueError("OPTIONS must be a dict")
     for key, opt in options.items():
@@ -225,13 +320,19 @@ def validate_options(options):
         if "values" not in opt:
             raise ValueError(f"Option '{key}' missing 'values' list")
         if "flags" not in opt:
-            raise ValueError(f"Option '{key}' missing 'flags' dict")
+            raise ValueError(f"Option '{key}' missing 'flags' dict or string")
         if "name" not in opt:
             raise ValueError(f"Option '{key}' missing 'name' string")
         if not isinstance(opt["values"], list):
             raise ValueError(f"Option '{key}' values must be a list")
+
+        # Expand string flags shorthand to dict
+        if isinstance(opt["flags"], str):
+            flag_str = opt["flags"]
+            opt["flags"] = {v: [flag_str, str(v)] for v in opt["values"]}
+
         if not isinstance(opt["flags"], dict):
-            raise ValueError(f"Option '{key}' flags must be a dict")
+            raise ValueError(f"Option '{key}' flags must be a dict or string")
         # Check that each value has a corresponding flags entry
         for v in opt["values"]:
             if v not in opt["flags"]:
@@ -241,6 +342,9 @@ def validate_options(options):
             monotonic = opt["monotonic"]
             if monotonic is not None and monotonic not in ("increasing", "decreasing"):
                 raise ValueError(f"Option '{key}' monotonic must be 'increasing', 'decreasing', or None")
+        # Check singular if present
+        if "singular" in opt and not isinstance(opt["singular"], bool):
+            raise ValueError(f"Option '{key}' singular must be boolean")
 
 
 def build_cmd(base_config_path, overrides, run_dir, run_name, extra_overrides=()):
@@ -282,7 +386,7 @@ def _get_visible_devices():
 
 
 def run_training(base_config_path, overrides, output_dir, run_name,
-                 experiment_name, extra_overrides=(), gpu_id=None):
+                 experiment_name, extra_overrides=(), gpu_id=None, tags=()):
     """Run training for one configuration. Returns (run_name, success, elapsed, log_file)."""
     run_dir = os.path.join(output_dir, experiment_name, run_name)
     os.makedirs(run_dir, exist_ok=True)
@@ -294,6 +398,8 @@ def run_training(base_config_path, overrides, output_dir, run_name,
     if "NGPU" not in env:
         env["NGPU"] = "1"
     env["AIM_EXPERIMENT"] = experiment_name
+    if tags:
+        env["AIM_TAGS"] = ",".join(str(t) for t in tags)
     if gpu_id is not None:
         # Map gpu_id to actual device from CUDA_VISIBLE_DEVICES if set
         visible_devices = _get_visible_devices()
@@ -330,15 +436,22 @@ def format_eta(seconds):
         return f"{hours}h {mins}m"
 
 
+def _combo_tags(combo):
+    """Build AIM tags from a combo dict. E.g. ['eco_enabled=True', 'quant_dtype=fp8']."""
+    return [f"{key}={value}" for key, value in combo.items()]
+
+
 def run_sweep(variations, base_config, output_dir, experiment_name,
               options, extra_overrides, num_parallel=1, num_gpus=1):
-    """Run all variations, sequentially (with monotonicity skipping) or in parallel."""
+    """Run all variations, sequentially (with monotonicity/singular skipping) or in parallel."""
     results = {}
     timings = {}
     failed_combos = []
+    succeeded_combos = []
     lock = threading.Lock()
     completed = [0]
     total = len(variations)
+    expected_runs = count_expected_runs(options)
     start_time = time.time()
 
     # Calculate max run name length for alignment
@@ -357,6 +470,8 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
             name_padded = run_name.ljust(max_name_len)
             if success:
                 sweep_print(f"  {OK}  {_GREEN}{name_padded}{_RESET} ({_BLUE}{log_file}{_RESET}) {progress}")
+                if combo is not None:
+                    succeeded_combos.append(combo)
             else:
                 sweep_print(f"  {FAIL}  {_GREEN}{name_padded}{_RESET} ({_BLUE}{log_file}{_RESET}) {progress}")
                 if combo is not None:
@@ -384,6 +499,7 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
                     base_config, variation["overrides"], output_dir,
                     run_name, experiment_name, extra_overrides,
                     gpu_id=gpu_id,
+                    tags=_combo_tags(variation["combo"]),
                 )
                 success = result[1]
                 elapsed = result[2]
@@ -408,7 +524,7 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
             run_name = variation["name"]
             combo = variation["combo"]
 
-            if should_skip_config(combo, failed_combos, options):
+            if should_skip_config(combo, failed_combos, succeeded_combos, options):
                 with lock:
                     completed[0] += 1
                     elapsed_total = time.time() - start_time
@@ -417,7 +533,7 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
                     eta = avg_time * remaining / num_parallel if num_parallel > 0 else 0
                     progress = f"[{completed[0]}/{total}, ETA: {format_eta(eta)}]"
                     name_padded = run_name.ljust(max_name_len)
-                    sweep_print(f"  {SKIP}  {_GREEN}{name_padded}{_RESET} (monotonicity rule) {progress}")
+                    sweep_print(f"  {SKIP}  {_GREEN}{name_padded}{_RESET} (monotonic/singular rule) {progress}")
                 results[run_name] = "skipped"
                 timings[run_name] = 0.0
                 continue
@@ -429,6 +545,7 @@ def run_sweep(variations, base_config, output_dir, experiment_name,
             _, success, elapsed, log_file = run_training(
                 base_config, variation["overrides"], output_dir, run_name,
                 experiment_name, extra_overrides, gpu_id=0,
+                tags=_combo_tags(variation["combo"]),
             )
             _record(run_name, success, elapsed, log_file, combo)
 
@@ -463,9 +580,10 @@ def main():
     sweep_name = None
     options = None
     default_base_config = None
+    exclude_fn = None
     sweeps = None
     if argv and argv[0].endswith(".py") and os.path.isfile(argv[0]):
-        sweep_name, options, default_base_config = load_sweep_file(argv[0])
+        sweep_name, options, default_base_config, exclude_fn = load_sweep_file(argv[0])
         validate_options(options)
         argv = argv[1:]
 
@@ -489,15 +607,8 @@ def main():
                         help="Number of concurrent jobs per GPU (default: 1)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print commands without running")
-    parser.add_argument("--sweep-log", type=str, default=None,
-                        help="Log file to record sweep output (plain text, no colors)")
 
     args, extra_overrides = parser.parse_known_args(argv)
-    # Open sweep log file if requested
-    global SWEEP_LOG_FILE
-    if args.sweep_log:
-        os.makedirs(os.path.dirname(os.path.abspath(args.sweep_log)), exist_ok=True)
-        SWEEP_LOG_FILE = open(args.sweep_log, "w")
     # Remove the '--' separator if it appears as the first extra argument
     if extra_overrides and extra_overrides[0] == '--':
         extra_overrides = extra_overrides[1:]
@@ -510,6 +621,7 @@ def main():
         options = sweep_info["options"]
         validate_options(options)
         default_base_config = sweep_info["base_config"]
+        exclude_fn = sweep_info.get("exclude")
 
     base_config = args.base_config or default_base_config
     if base_config is None:
@@ -549,18 +661,31 @@ def main():
         sweep_print(f"Error: config not found: {base_config}")
         sys.exit(1)
     output_dir = os.path.abspath(args.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
+    experiment_dir = os.path.join(output_dir, experiment_name)
+    os.makedirs(experiment_dir, exist_ok=True)
+
+    # Open sweep log automatically in the experiment directory (skip for dry runs)
+    global SWEEP_LOG_FILE
+    if not args.dry_run:
+        SWEEP_LOG_FILE = open(os.path.join(experiment_dir, "sweep.log"), "w")
 
     if options is None:
         raise RuntimeError("Internal error: options not loaded")
 
-    variations = generate_variations(sweep_name, options)
+    variations = generate_variations(sweep_name, options, exclude_fn)
+    expected_runs = count_expected_runs(options)
+    actual_runs = len(variations)
 
     sweep_print(f"Base config: {base_config}")
-    sweep_print(f"Sweep: {sweep_name} ({len(variations)} runs)")
+    if expected_runs < actual_runs:
+        sweep_print(f"Sweep: {sweep_name} (expected: {expected_runs} runs, worst case: {actual_runs} runs)")
+    else:
+        sweep_print(f"Sweep: {sweep_name} ({actual_runs} runs)")
     sweep_print(f"Experiment: {experiment_name}")
     sweep_print(f"GPUs: {num_gpus}, jobs/GPU: {args.jobs_per_gpu}, total workers: {num_parallel}")
     sweep_print(f"Extra overrides: {' '.join(extra_overrides or [])}")
+    if not args.dry_run:
+        sweep_print(f"Sweep log: {os.path.join(experiment_dir, 'sweep.log')}")
 
     sweep_print(f"Output: {output_dir}\n")
     for i, var in enumerate(variations, 1):
@@ -583,10 +708,11 @@ def main():
 
     if args.dry_run:
         sweep_print(f"\n{'=' * 80}")
-        sweep_print(f"DRY RUN — {len(variations)} runs would be executed")
+        if expected_runs < actual_runs:
+            sweep_print(f"DRY RUN — {expected_runs} runs expected ({actual_runs} worst case)")
+        else:
+            sweep_print(f"DRY RUN — {actual_runs} runs would be executed")
         sweep_print(f"{'=' * 80}")
-        if SWEEP_LOG_FILE is not None:
-            SWEEP_LOG_FILE.close()
         return
 
     sweep_print(f"\n{'=' * 80}")
@@ -602,6 +728,7 @@ def main():
     print(f"\nOutput: {output_dir}")
     if SWEEP_LOG_FILE is not None:
         SWEEP_LOG_FILE.close()
+        print(f"Sweep log: {os.path.join(experiment_dir, 'sweep.log')}")
 
     if has_failures:
         sys.exit(1)

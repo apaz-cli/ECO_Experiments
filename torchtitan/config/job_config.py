@@ -213,6 +213,14 @@ class LRScheduler:
     to ensure the learning rate does not drop below `optimizer.lr * lr_scheduler.min_lr_factor`.
     """
 
+    warmup_init_factor: float = 0.0
+    """
+    Initial learning rate factor at the start of warmup.
+    The warmup ramps linearly from warmup_init_factor to 1.0.
+    Default 0.0 means warmup starts from zero (standard behavior).
+    Set to e.g. 0.01 to match ECO paper's warmup schedule.
+    """
+
 
 @dataclass
 class DataLoader:
@@ -1082,6 +1090,15 @@ class ECO:
     When set, a separate master weights buffer is stored in optimizer state and
     updated in high precision. The quantized param is derived from master weights.
     Default is None (no master weights).
+    """
+
+    include_weight_decay_in_injection: bool = True
+    """
+    Whether to include the weight-decay factor (1 - ηλ) in the ECO injection coefficient.
+    
+    The exact derivation (see leloykun.github.io/ponder/eco/) multiplies the injection
+    coefficient by (1 - ηλ) when weight decay is applied before quantization.
+    Default is False (match the paper's Algorithm 2/3).
     """
 
 

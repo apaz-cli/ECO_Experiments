@@ -2,8 +2,8 @@
 # Section 4: Adam β₁/β₂ sensitivity analysis
 # Dimensions: β₁(5) × β₂(4) × ±ECO (40 runs)
 BASE_CONFIG = "configs/experiments/master.toml"
-ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
-ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16", "--eco.activation-dtype", "none", "--eco.no-stochastic-rounding"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8", "--eco.activation-dtype", "fp8", "--eco.no-stochastic-rounding"]
 
 BETA1_VALUES = [0.8, 0.85, 0.9, 0.95, 0.99]
 BETA2_VALUES = [0.95, 0.98, 0.99, 0.999]

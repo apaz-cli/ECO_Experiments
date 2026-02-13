@@ -135,6 +135,7 @@ def build_lr_schedulers(
     stable_steps = total_steps + 1 - warmup_steps - decay_steps
     lr_decay_type = lr_scheduler_config.decay_type
     min_lr_factor = lr_scheduler_config.min_lr_factor
+    warmup_init_factor = lr_scheduler_config.warmup_init_factor
 
     def linear_warmup_stable_decay(
         current_step: int,
@@ -143,6 +144,7 @@ def build_lr_schedulers(
         decay_steps: int,
         lr_decay_type: str,
         min_lr_factor: float,
+        warmup_init_factor: float,
     ):
         """
         Computes linear warmup followed by stable learning rate for a while,
@@ -159,16 +161,18 @@ def build_lr_schedulers(
 
         If `min_lr_factor` is specified, the decay range is scaled from 1 to `min_lr_factor`
         to ensure the learning rate does not drop below this minimum value.
+
+        warmup_init_factor controls the initial LR factor at step 0 of warmup.
         """
         warmup_stable_steps = warmup_steps + stable_steps
         if current_step < warmup_steps:
-            # linear warmup
+            # linear warmup from warmup_init_factor to 1.0
             # 0-indexed step, hence + 1 adjustments
             current_step += 1
             assert (
                 warmup_steps != 0
             ), "warmup_steps must not be zero to reach this branch"
-            curr_adjustment = float(current_step / warmup_steps)
+            curr_adjustment = warmup_init_factor + (1.0 - warmup_init_factor) * float(current_step / warmup_steps)
         elif current_step < warmup_stable_steps:
             curr_adjustment = 1.0
         else:
@@ -195,5 +199,6 @@ def build_lr_schedulers(
         decay_steps=decay_steps,
         lr_decay_type=lr_decay_type,
         min_lr_factor=min_lr_factor,
+        warmup_init_factor=warmup_init_factor,
     )
     return LRSchedulersContainer(optimizers, lr_lambda)

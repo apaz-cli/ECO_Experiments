@@ -350,6 +350,7 @@ def build_optimizers(
             optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
             optimizer_kwargs["quantize_weights"] = eco_config.quantize_weights
             optimizer_kwargs["quant_dtype"] = eco_config.quant_dtype
+            optimizer_kwargs["include_weight_decay_in_injection"] = eco_config.include_weight_decay_in_injection
             # Master weights dtype (None, fp32, or bf16)
             mw_dtype_str = getattr(eco_config, "master_weights_dtype", None)
             if mw_dtype_str is not None and mw_dtype_str.lower() != "none":
@@ -361,11 +362,14 @@ def build_optimizers(
     if name == "ECOMuon":
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs.pop("foreach", None)
+        optimizer_kwargs.pop("betas", None)  # Muon uses adam_betas instead
+        optimizer_kwargs.pop("eps", None)    # Muon uses adam_eps instead
 
         # Muon-specific hyperparameters
         optimizer_kwargs["momentum"] = getattr(optimizer_config, "momentum", 0.95)
         optimizer_kwargs["ns_steps"] = 5
         optimizer_kwargs["adam_betas"] = (beta1, beta2)  # For 1D params
+        optimizer_kwargs["adam_eps"] = eps
         optimizer_kwargs["adam_eps"] = eps
 
         # Add dtype and ECO configuration from eco_config if available
@@ -387,6 +391,7 @@ def build_optimizers(
             optimizer_kwargs["heuristic_log_freq"] = eco_config.heuristic_log_freq
             optimizer_kwargs["quantize_weights"] = eco_config.quantize_weights
             optimizer_kwargs["quant_dtype"] = eco_config.quant_dtype
+            optimizer_kwargs["include_weight_decay_in_injection"] = eco_config.include_weight_decay_in_injection
             # Master weights dtype (None, fp32, or bf16)
             mw_dtype_str = getattr(eco_config, "master_weights_dtype", None)
             if mw_dtype_str is not None and mw_dtype_str.lower() != "none":

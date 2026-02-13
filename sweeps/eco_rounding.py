@@ -2,8 +2,8 @@
 # Section 2: ECO with stochastic rounding ablation
 # Dimensions: ±ECO × ±stochastic rounding (4 runs)
 BASE_CONFIG = "configs/experiments/master.toml"
-ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
-ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16", "--eco.activation-dtype", "none"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8", "--eco.activation-dtype", "fp8"]
 
 OPTIONS = {
     "eco_enabled": {

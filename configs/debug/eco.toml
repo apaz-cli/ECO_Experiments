@@ -25,13 +25,14 @@ lr = 8e-4
 beta1 = 0.9
 beta2 = 0.98
 eps = 1e-9
+weight_decay = 0.1
 
 [eco]
 enabled = true
 quantize_weights = true
 quant_dtype = "fp8"
 heuristic_log_freq = 1
-stochastic_rounding = false
+stochastic_rounding = true
 
 [lr_scheduler]
 warmup_steps = 4000

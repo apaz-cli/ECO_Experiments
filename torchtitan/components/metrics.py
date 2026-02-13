@@ -234,6 +234,13 @@ class AimLogger(BaseLogger):
             # Track hyperparameters (only for new runs)
             self.run["hparams"] = job_config.to_dict()
 
+        # Apply tags from environment (set by run_sweep.py)
+        aim_tags = os.getenv("AIM_TAGS", "")
+        for tag_str in aim_tags.split(","):
+            tag_str = tag_str.strip()
+            if tag_str:
+                self.run.add_tag(tag_str)
+
         logger.info(f"Aim logging enabled. Logs will be saved at {aim_repo}")
 
     def log(self, metrics: dict[str, Any], step: int) -> None:

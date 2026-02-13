@@ -84,6 +84,7 @@ class ECOAdamW(Optimizer):
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
         master_weights_dtype: torch.dtype | None = None,
+        include_weight_decay_in_injection: bool = False,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -112,6 +113,7 @@ class ECOAdamW(Optimizer):
         self._quantize_weights = quantize_weights
         self._quant_dtype = quant_dtype
         self._master_weights_dtype = master_weights_dtype
+        self._include_weight_decay_in_injection = include_weight_decay_in_injection
         self._eco_step_count = 0
         # Accumulated heuristic metrics (consumed by get_eco_metrics)
         self._eco_metrics: dict[str, float] = {}
@@ -314,6 +316,8 @@ class ECOAdamW(Optimizer):
             error = param_f - theta_hat  # e = θ̃ − θ_hat
 
             injection_coeff = (bias_correction1 / lr) * (1.0 - 1.0 / beta1)
+            if self._include_weight_decay_in_injection and weight_decay != 0:
+                injection_coeff *= (1.0 - lr * weight_decay)
             adaptive_scale = (exp_avg_sq_c / bias_correction2).sqrt().add_(eps)
             error_injected = injection_coeff * adaptive_scale * error
 
@@ -410,6 +414,8 @@ class ECOAdamW(Optimizer):
             error = param_dequant - theta_hat  # e = θ̃ − θ_hat
 
             injection_coeff = (bias_correction1 / lr) * (1.0 - 1.0 / beta1)
+            if self._include_weight_decay_in_injection and weight_decay != 0:
+                injection_coeff *= (1.0 - lr * weight_decay)
             adaptive_scale = (exp_avg_sq_c / bias_correction2).sqrt().add_(eps)
             error_injected = injection_coeff * adaptive_scale * error
 

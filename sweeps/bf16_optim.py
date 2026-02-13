@@ -2,8 +2,8 @@
 # Section 3: BF16 optimizer states
 # Dimensions: ±ECO × FP32/BF16 optimizer states (4 runs)
 BASE_CONFIG = "configs/experiments/master.toml"
-ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16"]
-ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8"]
+ECO_OFF = ["--eco.no-enabled", "--eco.quant-dtype", "bf16", "--eco.activation-dtype", "none", "--eco.no-stochastic-rounding"]
+ECO_ON = ["--eco.enabled", "--eco.quant-dtype", "fp8", "--eco.activation-dtype", "fp8", "--eco.no-stochastic-rounding"]
 
 OPTIONS = {
     "eco_enabled": {

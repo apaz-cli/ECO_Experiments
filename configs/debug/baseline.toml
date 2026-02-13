@@ -25,6 +25,7 @@ lr = 8e-4
 beta1 = 0.9
 beta2 = 0.98
 eps = 1e-9
+weight_decay = 0.1
 
 [eco]
 enabled = false

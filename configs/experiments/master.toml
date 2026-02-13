@@ -1,20 +1,35 @@
 #!/tmp/eco/run_config.sh
 
-# Master config for ECO experiments.
-# This is the base configuration for all scaling law experiments (100M-800M models).
-# Model-specific parameters (flavor, lr, steps, warmup_steps) should be overridden via CLI.
+# Master config for ECO scaling-law experiments.
+# This configuration is tuned for a 30M parameter model. To use with other model sizes,
+# override the following parameters via CLI or create a derived config.
 #
-# Based on the ECO paper hyperparameters:
-#   - AdamW, beta1=0.9, beta2=0.98, eps=1e-9, wd=0.1, grad clip 1.0
-#   - LR scaling: 1.2e-3 * 50M/N_params (QUEST scaling law)
-#   - Linear warmup (10% steps), cosine decay to 0.1x peak
+# Scaling equations (based on ECO paper §4.1):
+#   - Token budget: tokens = 100 × N  (N = number of parameters in millions)
+#   - Global batch size: 512 sequences
+#   - Sequence length: 512 tokens
+#   - Training steps: steps = (100 × N × 10⁶) / (512 × 512)
+#   - Warm‑up steps: warmup = 0.1 × steps (10% of total)
+#   - Peak learning rate: lr_peak = 1.2e-3 × min(1, 50 / N)  (capped at 1.2e-3 for N ≤ 50M)
+#   - LR schedule: linear warm‑up (from 0.01×lr) to lr_peak, cosine decay to 0.1×lr_peak
+#   - Dataset: C4 (en)
+#
+# Example for 30M model:
+#   steps = (100 × 30 × 10⁶) / (512 × 512) ≈ 11446
+#   warmup = 1145
+#   lr_peak = 1.2e-3 × min(1, 50/30) = 1.2e-3 × 1 = 1.2e-3
+#
+# Override via CLI (example for 100M):
+#   --model.flavor 100M --optimizer.lr 6e-4 --training.steps 38147 --lr_scheduler.warmup_steps 3815
+#
+# Based on ECO paper hyperparameters:
+#   - AdamW, beta1=0.9, beta2=0.98, eps=1e-9, weight_decay=0.1, grad clip 1.0
 #   - T5 tokenizer (vocab=32100)
-#   - 100N tokens total, batch=512 seqs, seq_len=512
-#
-# Usage: Override model.flavor, optimizer.lr, lr_scheduler.warmup_steps, training.steps
+#   - Quantization: FP8 with stochastic rounding (ECO enabled separately)
+#   - Dataset: C4 (en)
 
 [job]
-dump_folder = "./outputs/experiment"
+dump_folder = "./outputs/master"
 description = "ECO experiment run"
 
 [profiling]
@@ -27,31 +42,32 @@ enable_aim = true
 
 [model]
 name = "llama3"
-flavor = "100M"  # Override per experiment: 100M, 430M, etc.
+flavor = "30M"
 # T5 tokenizer (vocab=32100, matches ECO paper)
 hf_assets_path = "./assets/tokenizers/t5-base"
 
 [optimizer]
 name = "ECOAdamW"
-lr = 6e-4  # Override per model size: 6e-4 for 100M, 1.5e-4 for 430M, etc.
+lr = 1.2e-3  # Override per model size: 1.2e-3 * min(1, 50M / N_params) (capped at 1.2e-3 for N <= 50M)
 beta1 = 0.9
 beta2 = 0.98
 eps = 1e-9
 weight_decay = 0.1
 
 [lr_scheduler]
-warmup_steps = 3815  # Override: 10% of total steps
+warmup_steps = 1145  # Override: 10% of total steps
 decay_type = "cosine"
 min_lr_factor = 0.1
+warmup_init_factor = 0.01
 
 [training]
 local_batch_size = 32
-global_batch_size = 256
+global_batch_size = 512
 seq_len = 512
 max_norm = 1.0
-steps = 38147  # Override per model: 100N tokens / (512*512)
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+steps = 11446  # Override per model size: (100 * N_params / (global_batch_size * seq_len))
+dataset = "c4"
+dataset_path = "/mnt/skraid0/c4"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -73,14 +89,14 @@ components = ["model", "loss"]
 [eco]
 enabled = false
 quantize_weights = true
-quant_dtype = "bf16"
+quant_dtype = "fp8"
 heuristic_log_freq = 1
-stochastic_rounding = false
+stochastic_rounding = true
 
 [validation]
-enable = false
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+enable = true
+dataset = "c4_validation"
+dataset_path = "/mnt/skraid0/c4"
 seq_len = 512
-freq = 2000
+freq = 11446
 steps = -1
