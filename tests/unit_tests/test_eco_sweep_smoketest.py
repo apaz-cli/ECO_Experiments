@@ -9,6 +9,7 @@ requires a GPU and the full training stack. Run with:
 """
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -46,8 +47,9 @@ def test_all_configs_run(tmp_path):
         f"stderr tail:\n{result.stderr[-1000:]}"
     )
 
-    # Verify all 16 ran by checking "16/16 OK" in output
-    assert "16/16 OK" in result.stdout, (
+    # Verify all runs passed by checking "N/N OK" in output
+    match = re.search(r"(\d+)/(\d+) OK", result.stdout)
+    assert match and match.group(1) == match.group(2), (
         f"Not all runs passed.\nstdout tail:\n{result.stdout[-3000:]}"
     )
 

@@ -228,6 +228,50 @@ class QuantizedTensor(torch.Tensor):
         
         return func(*args_dequant, **kwargs_dequant)
     
+    # FSDP2 extension hooks
+    def fsdp_pre_all_gather(self, mesh):
+        """Prepare tensors for FSDP2 all-gather.
+
+        Returns the FP8 _data tensor (bandwidth-efficient) plus metadata
+        needed to reconstruct after gathering.
+        """
+        all_gather_inputs = (self._data,)
+        metadata = (self._scale, self._quant_dtype, self._compute_dtype, self._zero_point, self._axiswise_dim)
+        return all_gather_inputs, metadata
+
+    def fsdp_post_all_gather(self, all_gather_outputs, metadata, param_dtype, *, out=None):
+        """Reconstruct dequantized tensor after FSDP2 all-gather.
+
+        Two paths:
+        - First call (out=None): return (dequantized_tensor, (data_tensor,))
+        - Subsequent calls (out provided): write into out in-place, return None
+        """
+        (data,) = all_gather_outputs
+        scale, quant_dtype, compute_dtype, zero_point, axiswise_dim = metadata
+
+        # Dequantize: mirrors QuantizedTensor.dequantize() but on raw tensors
+        if zero_point is not None:
+            dequant = data.to(compute_dtype) - zero_point.to(compute_dtype)
+        else:
+            dequant = data.to(compute_dtype)
+
+        if axiswise_dim is not None:
+            s = scale.view(*[1 if i != axiswise_dim else -1 for i in range(data.ndim)])
+        else:
+            s = scale
+
+        dequant = dequant * s
+
+        # Cast to param_dtype for mixed precision
+        if dequant.dtype != param_dtype:
+            dequant = dequant.to(param_dtype)
+
+        if out is not None:
+            out.copy_(dequant)
+            return
+
+        return dequant, (data,)
+
     # Disable torch_function to ensure dispatch works correctly
     __torch_function__ = torch._C._disabled_torch_function_impl
 
