@@ -61,3 +61,4 @@ class QuantizationConverter(ModelConverter):
 import torchtitan.components.quantization.float8  # noqa: F401
 import torchtitan.components.quantization.mx  # noqa: F401
 import torchtitan.components.quantization.quantized  # noqa: F401
+import torchtitan.components.activation_quant  # noqa: F401

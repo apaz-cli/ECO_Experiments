@@ -5,9 +5,10 @@
 1. [Base ECO Implementation](#1-base-eco-implementation)
 2. [Scaling to Llama 3 8B](#2-scaling-to-llama-3-8b)
 3. [BF16 Optimizer States](#3-bf16-optimizer-states)
-4. [Adam β₁/β₂ Sensitivity](#4-adam-β1β2-sensitivity)
-5. [ECO for Muon](#5-eco-for-muon)
-6. [Implementation Roadmap](#6-implementation-roadmap)
+4. [Adam β₁ Sensitivity](#4-adam-β1-sensitivity)
+5. [Weight Decay Injection Factor](#5-weight-decay-injection-factor)
+6. [ECO for Muon](#6-eco-for-muon)
+7. [Implementation Roadmap](#7-implementation-roadmap)
 
 ---
 
@@ -122,14 +123,17 @@ dimension has `values` (what to iterate over), `flags` (CLI args per value), and
 
 | File | Dimensions | Runs | Section |
 |------|-----------|------|---------|
-| `sweeps/eco_vs_baseline.py` | ±ECO | 2 | §2 |
-| `sweeps/eco_rounding.py` | ±ECO × ±stochastic rounding | 4 | §2 |
-| `sweeps/bf16_optim.py` | ±ECO × FP32/BF16 optim states | 4 | §3 |
-| `sweeps/beta.py` | β₁(5) × β₂(4) × ±ECO | 40 | §4 |
+| `sweeps/paper_repro.py` | 7 paper treatments × speed | ~7 | §2 |
+| `sweeps/bf16_eco.py` | bf16 vs bf16+ECO × speed | ~2 | §2 |
+| `sweeps/bf16_optim.py` | 4 BF16 optim treatments × speed | ~4 | §3 |
+| `sweeps/beta.py` | β₁(5) | 5 | §4 |
+| `sweeps/weight_decay_injection.py` | wd(2) × wd_in_injection(2) | 3 | §5 |
+| `sweeps/muon_approaches.py` | 4 ECO approaches × speed | ~4 | §6 |
+| `sweeps/debug_smoke.py` | eco × quant × sr × optim_dtype × compute_dtype | 32 | — |
 
-All sweep files use common flag patterns:
-- `ECO_OFF = ["--eco.enabled=false", "--model.converters", ""]`
-- `ECO_ON = ["--eco.enabled=true", "--model.converters", "quantize.linear.float8,eco"]`
+All sweep files use `_treatments.py` for standard treatment definitions and `_flags()`
+to generate CLI arguments. Sweeps can define `EXTRA_FLAGS` for flags prepended to every
+run.
 
 ---
 
@@ -387,7 +391,7 @@ The 2×2 design is self-controlled. The key comparison is:
 
 ---
 
-## 4. Adam β₁/β₂ Sensitivity
+## 4. Adam β₁ Sensitivity
 
 ### 4.1 Motivation
 
@@ -420,30 +424,64 @@ line 307–311):
 Higher β₁ → weaker injection AND higher noise floor. This predicts ECO may prefer lower
 β₁ than standard training, potentially shifting the optimal hyperparameters.
 
+β₂ is fixed at 0.98 (the paper's choice, line 305). β₂ enters the injection only through
+Adam's standard adaptive scaling `√(v/(1−β₂^t)) + ε`, which is unchanged by ECO. No
+ECO-specific β₂ sensitivity is expected.
+
 ### 4.2 Setup
 
 **Model:** 100M and 430M (small enough for a sweep).
 
-**Sweep grid:**
-- β₁ ∈ {0.8, 0.85, 0.9, 0.95, 0.99}
-- β₂ ∈ {0.95, 0.98, 0.99, 0.999}
-
-At each (β₁, β₂): run both baseline and ECO.
-Total: 5 × 4 × 2 = 40 runs at 100M.
-
-Use the adapted sweep script (Section 0.3) to generate and launch all configs.
+**Sweep:** β₁ ∈ {0.8, 0.85, 0.9, 0.95, 0.99}, β₂ = 0.98 (fixed).
+Total: 5 runs per model size, all on `fp8_eco_sr` base treatment.
 
 ### 4.3 What to Measure
 
-- **Validation loss** at each (β₁, β₂) → 2D heatmaps for baseline vs ECO.
-- **Optimal (β₁, β₂)** for each method — does ECO shift the optimum?
-- **Sensitivity contours** — is ECO more or less sensitive to β choice?
+- **Validation loss** at each β₁.
 - **Injection magnitude** |Δm|/|m| at each β₁.
-- **Heuristic validation** at each β₁.
+- **Heuristic validation** at each β₁ — does e_t ≈ e_{t+1} degrade at extreme β₁?
 
 ---
 
-## 5. ECO for Muon
+## 5. Weight Decay Injection Factor
+
+### 5.1 Motivation
+
+The paper's ECO injection (Algorithm 3) derives the momentum correction for SGDM without
+weight decay. With AdamW-style decoupled weight decay (θ ← θ − ηλθ − η·update), the
+virtual sequence construction gains an extra factor. Following leloykun's derivation
+(https://leloykun.github.io/ponder/eco/), the corrected injection coefficient is:
+
+```
+Δm = (1/η)(1 − 1/β₁)(1 − ηλ) · diag(√(v/(1−β₂^t)) + ε) · e
+```
+
+The additional `(1 − ηλ)` factor accounts for weight decay shrinking the weights between
+steps. The paper does not report this factor — the derivation in Appendix A (lines
+583–592) assumes no weight decay.
+
+At typical hyperparameters (η = 3e-4, λ = 0.1), the factor is `1 − 3e-5 ≈ 0.99997` —
+a negligible correction. This experiment confirms that empirically: the factor should
+make no measurable difference, but including it makes the derivation exact.
+
+### 5.2 Setup
+
+**Model:** 100M (Muon, `configs/experiments/muon.toml`).
+
+**Sweep:** weight_decay ∈ {0.0, 0.1} × include_weight_decay_in_injection ∈ {False, True}.
+The combo (wd=0, injection=True) is excluded (factor is always 1 when λ=0).
+Total: 3 runs.
+
+### 5.3 What to Measure
+
+- **Validation loss** — confirm no meaningful difference between ±factor at wd=0.1.
+- **Injection coefficient** — verify the (1 − ηλ) correction is negligibly small.
+- This is a completeness result: the paper's formula is practically correct even without
+  the weight decay factor, but the exact formula includes it.
+
+---
+
+## 6. ECO for Muon
 
 ### 5.1 Muon Background
 
@@ -632,7 +670,7 @@ total). Serves as an upper bound on achievable performance.
 
 ---
 
-## 6. Implementation Roadmap
+## 7. Implementation Roadmap
 
 ### Phase 1: Infrastructure + Base ECO (**DONE**)
 1. Port AIM logger and adapt sweep script (Section 0).
@@ -650,12 +688,13 @@ total). Serves as an upper bound on achievable performance.
 8. Create Llama 3 8B ECO configs. Run 8B baseline + ECO. Analyze heuristic validation
    at 8B.
 
-### Phase 3: BF16 Optimizer + β Sweep + Muon (parallelizable)
-These three experiments are independent and can proceed in parallel.
+### Phase 3: BF16 Optimizer + β Sweep + Weight Decay + Muon (parallelizable)
+These experiments are independent and can proceed in parallel.
 
 9. Run the 4 BF16-optimizer conditions at 430M/1B using `--eco.optim_state_dtype bf16`.
-10. Run β₁/β₂ sweep at 100M using the sweep script.
-11. Add Muon to torchtitan. Validate Muon baseline. Implement ECO-A and ECO-B. Run
+10. Run β₁ sweep at 100M (5 runs, β₂ fixed at 0.98).
+11. Run weight decay injection factor sweep at 100M (3 runs, Section 5).
+12. Add Muon to torchtitan. Validate Muon baseline. Implement four ECO approaches. Run
     comparison at 100M/430M.
 
 ### Notes

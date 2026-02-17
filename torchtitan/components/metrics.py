@@ -196,23 +196,25 @@ class AimLogger(BaseLogger):
                 ".aim",
             )
 
-        os.makedirs(aim_repo, exist_ok=True)
+        # Remote tracking server (aim://host:port) — skip local filesystem init
+        if not aim_repo.startswith("aim://"):
+            os.makedirs(aim_repo, exist_ok=True)
 
-        # Check if Aim repository needs initialization
-        needs_init = not os.path.exists(os.path.join(aim_repo, "meta"))
+            # Check if Aim repository needs initialization
+            needs_init = not os.path.exists(os.path.join(aim_repo, "meta"))
 
-        if needs_init:
-            logger.info(f"Initializing Aim repository at {aim_repo}")
-            try:
-                subprocess.run(
-                    ["aim", "init", "--repo", aim_repo, "--yes"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to initialize Aim repository: {e.stderr}")
-                raise
+            if needs_init:
+                logger.info(f"Initializing Aim repository at {aim_repo}")
+                try:
+                    subprocess.run(
+                        ["aim", "init", "--repo", aim_repo, "--yes"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Failed to initialize Aim repository: {e.stderr}")
+                    raise
 
         # Initialize Aim run - resume if run_hash is provided
         if run_hash:

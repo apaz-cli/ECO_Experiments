@@ -38,10 +38,27 @@ if [ ! -d "$AIM_REPO/meta" ]; then
     fi
 fi
 
-echo "Starting Aim server..."
-echo "Visit http://localhost:43800 to see the Aim UI"
-echo "Press Ctrl+C to stop the server"
+echo "Starting Aim services..."
+echo "  Remote tracking server: port 53800 (for multi-machine sweeps)"
+echo "  UI:                     http://localhost:43800"
+echo "Press Ctrl+C to stop"
 echo ""
 
-# Start Aim server (blocking command)
+# Start remote tracking server (gRPC, for multi-machine sweeps)
+aim server --repo "$AIM_REPO" --host 0.0.0.0 --port 53800 &
+AIM_SERVER_PID=$!
+
+cleanup() {
+    echo ""
+    echo "Stopping Aim services..."
+    kill $AIM_SERVER_PID 2>/dev/null
+    wait $AIM_SERVER_PID 2>/dev/null
+    exit 0
+}
+trap cleanup INT TERM
+
+# Start Aim UI (blocking command)
 aim up --host 0.0.0.0 --port 43800 --repo "$AIM_REPO"
+
+# If aim up exits, clean up the server too
+kill $AIM_SERVER_PID 2>/dev/null

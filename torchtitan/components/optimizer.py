@@ -332,6 +332,16 @@ def build_optimizers(
         optimizer_kwargs.pop("fused", None)
         optimizer_kwargs.pop("foreach", None)
 
+        # Exclude embedding and output layers from weight quantization.
+        # Per the paper: "we apply the method only to the linear layers
+        # within transformer blocks, excluding the embedding and output layers."
+        exclude_ids = set()
+        for model in model_parts:
+            for pname, p in model.named_parameters():
+                if not pname.startswith("layers."):
+                    exclude_ids.add(id(p))
+        optimizer_kwargs["exclude_from_quant"] = frozenset(exclude_ids)
+
         # Add dtype configuration from eco_config if available
         if eco_config is not None:
             dtype_map = {

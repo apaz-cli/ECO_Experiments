@@ -85,6 +85,7 @@ class ECOAdamW(Optimizer):
         quant_dtype: str = "bf16",
         master_weights_dtype: torch.dtype | None = None,
         include_weight_decay_in_injection: bool = False,
+        exclude_from_quant: frozenset | None = None,
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -114,6 +115,7 @@ class ECOAdamW(Optimizer):
         self._quant_dtype = quant_dtype
         self._master_weights_dtype = master_weights_dtype
         self._include_weight_decay_in_injection = include_weight_decay_in_injection
+        self._exclude_from_quant = exclude_from_quant or frozenset()
         self._eco_step_count = 0
         # Accumulated heuristic metrics (consumed by get_eco_metrics)
         self._eco_metrics: dict[str, float] = {}
@@ -184,7 +186,7 @@ class ECOAdamW(Optimizer):
                         state["master_weights"] = param.detach().clone().to(self._master_weights_dtype)
                         # Quantize param.data so the first forward pass uses quantized weights
                         # (otherwise first forward uses unquantized, all others use quantized)
-                        if self._quantize_weights and param.dim() >= 2:
+                        if self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
                             param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
                             theta_hat = self._requantize(param_f, self._quant_dtype, self._stochastic_rounding)
                             param.data.copy_(theta_hat.to(param.dtype))
@@ -194,7 +196,7 @@ class ECOAdamW(Optimizer):
                 state["step"] += 1
                 step = state["step"].item()
 
-                if self._quantize_weights and param.dim() >= 2:
+                if self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
                     self._step_simulated_quant(
                         param, grad, exp_avg, exp_avg_sq,
                         lr, beta1, beta2, eps, weight_decay, step,
@@ -467,7 +469,16 @@ class ECOAdamW(Optimizer):
             scaled = tensor / scale
 
             if stochastic_rounding:
-                ulp = scaled.abs() * (2 ** -3)  # 3 mantissa bits for E4M3
+                # Exact ULP for FP8 E4M3: in binade [2^e, 2^(e+1)),
+                # ULP = 2^(e - 3) where e = floor(log2(|x|)).
+                # The old formula |x| * 2^-3 overestimates by up to 2x.
+                abs_scaled = scaled.abs()
+                min_normal = 2.0 ** -6   # smallest normal for E4M3 (bias=7)
+                subnormal_ulp = 2.0 ** -9  # fixed step in subnormal region
+                log2_abs = torch.floor(torch.log2(abs_scaled.clamp(min=min_normal)))
+                ulp = torch.exp2(log2_abs - 3)
+                ulp = torch.where(abs_scaled < min_normal, subnormal_ulp, ulp)
+                ulp = torch.where(abs_scaled == 0, subnormal_ulp, ulp)
                 noise = (torch.rand_like(scaled) - 0.5) * ulp
                 scaled = (scaled + noise).clamp(-fp8_max, fp8_max)
 

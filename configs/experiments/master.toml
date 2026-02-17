@@ -45,6 +45,7 @@ name = "llama3"
 flavor = "30M"
 # T5 tokenizer (vocab=32100, matches ECO paper)
 hf_assets_path = "./assets/tokenizers/t5-base"
+converters = ["activation_quant"]
 
 [optimizer]
 name = "ECOAdamW"
@@ -61,7 +62,7 @@ min_lr_factor = 0.1
 warmup_init_factor = 0.01
 
 [training]
-local_batch_size = 32
+local_batch_size = 64
 global_batch_size = 512
 seq_len = 512
 max_norm = 1.0
@@ -87,14 +88,15 @@ enable = false
 components = ["model", "loss"]
 
 [eco]
-enabled = false
+enabled = true
 quantize_weights = true
 quant_dtype = "fp8"
+activation_dtype = "fp8"
 heuristic_log_freq = 1
 stochastic_rounding = true
 
 [validation]
-enable = true
+enable = false
 dataset = "c4_validation"
 dataset_path = "/mnt/skraid0/c4"
 seq_len = 512
