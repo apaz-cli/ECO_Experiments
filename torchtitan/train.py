@@ -45,7 +45,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
 
     # swappable training components in TrainSpec
     tokenizer: train_spec_module.BaseTokenizer | None
-    dataloader: train_spec_module.BaseDataLoader
+    dataloader: train_spec_module.BaseDataLoader | None
     # TODO: we should make this list[ModelProtocol] but this will affect many components.
     # will do this in a separate PR
     model_parts: list[torch.nn.Module]
@@ -123,11 +123,15 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
             else None
         )
 
-        self.dataloader = self.train_spec.build_dataloader_fn(
-            dp_world_size=batch_degree,
-            dp_rank=batch_rank,
-            tokenizer=self.tokenizer,
-            job_config=job_config,
+        self.dataloader = (
+            self.train_spec.build_dataloader_fn(
+                dp_world_size=batch_degree,
+                dp_rank=batch_rank,
+                tokenizer=self.tokenizer,
+                job_config=job_config,
+            )
+            if self.train_spec.build_dataloader_fn is not None
+            else None
         )
 
         # build model (using meta init)
@@ -671,6 +675,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
                 base_folder=job_config.job.dump_folder,
             ) as memory_profiler,
         ):
+            assert self.dataloader is not None, "Dataloader is not initialized"
             data_iterator = self.batch_generator(self.dataloader)
             while self.should_continue_training():
                 self.step += 1
@@ -711,8 +716,7 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
         if torch.distributed.get_rank() == 0:
             logger.info("Sleeping 2 seconds for other ranks to complete")
             time.sleep(2)
-
-        logger.info("Training completed")
+            logger.info("Training completed")
 
     def should_continue_training(self) -> bool:
         return self.step < self.job_config.training.steps
