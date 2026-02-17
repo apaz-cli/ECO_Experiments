@@ -30,7 +30,7 @@ COMPILE = {
 }
 
 AC_MODE = {
-    "values": ["full", "op", "none"],
+    "values": ["none", "op", "full"],
     "flags": {
         "full": ["--activation_checkpoint.mode", "full"],
         "op": ["--activation_checkpoint.mode", "selective", "--activation_checkpoint.selective_ac_option", "op"],

@@ -316,7 +316,7 @@ def _get_default_aim_server():
         return f"{socket.gethostname()}:53800"
 
 
-def _run_one(base_config, var, output_dir, experiment, extra, gpu,
+def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
              worker=None, remote_dir=None, aim_server=None, sync_artifacts=False):
     """Execute one training run. Returns (var, success, elapsed, log_file).
 
@@ -326,12 +326,6 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu,
     name = var["name"]
     run_dir = os.path.join(output_dir, experiment, name)
     os.makedirs(run_dir, exist_ok=True)
-
-    log = os.path.join(run_dir, "training.log")
-    n = 0
-    while os.path.exists(log):
-        n += 1
-        log = os.path.join(run_dir, f"training.{n}.log")
 
     tags = [f"{k}={v}" for k, v in var["combo"].items()]
     tag_str = ",".join(str(t) for t in tags)
@@ -458,20 +452,27 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 
         nm = var["name"].ljust(pad)
         sdesc = _singular_desc(var["combo"], options) if has_singular else ""
+        # Compute log path here so we can print it at START
+        run_dir = os.path.join(output_dir, experiment, var["name"])
+        log = os.path.join(run_dir, "training.log")
+        n = 0
+        while os.path.exists(log):
+            n += 1
+            log = os.path.join(run_dir, f"training.{n}.log")
         with lock:
             if worker:
                 loc = f"{_MAGENTA}{worker}{_RESET} gpu {gpu}"
             else:
                 loc = f"gpu {gpu}"
             if sdesc:
-                sweep_print(f"  {_CYAN}START{_RESET}  {_GREEN}{nm}{_RESET} ({sdesc}) {loc}")
+                sweep_print(f"  {_CYAN}START{_RESET}  {_GREEN}{nm}{_RESET} ({sdesc}) {loc} {_BLUE}{log}{_RESET}")
             else:
-                sweep_print(f"  {_CYAN}START{_RESET}  {_GREEN}{nm}{_RESET} {loc}")
+                sweep_print(f"  {_CYAN}START{_RESET}  {_GREEN}{nm}{_RESET} {loc} {_BLUE}{log}{_RESET}")
 
         job_t0 = time.time()
         try:
             _, ok, elapsed, log = _run_one(
-                base_config, var, output_dir, experiment, extra, gpu,
+                base_config, var, output_dir, experiment, extra, gpu, log,
                 worker=worker, remote_dir=remote_dir, aim_server=aim_server,
                 sync_artifacts=sync_artifacts)
         except Exception:
@@ -511,34 +512,43 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 
     with ThreadPoolExecutor(max_workers=num_slots) as pool:
         futures = {}
-        for var in variations:
-            _drain_completed()
-
-            # Serialize within a treatment: wait for previous combo to finish
-            # so its result is available for the skip check
-            tk = _treatment_key(var["combo"], options)
-            prev = inflight.get(tk)
-            if prev is not None and not prev.done():
-                prev.result()
+        remaining = list(variations)
+        while remaining:
+            deferred = []
+            for var in remaining:
                 _drain_completed()
 
-            # Wait for a slot if pool is full
-            while len(futures) >= num_slots:
+                # Defer if previous run of same treatment is still in-flight
+                tk = _treatment_key(var["combo"], options)
+                prev = inflight.get(tk)
+                if prev is not None and not prev.done():
+                    deferred.append(var)
+                    continue
+
+                # Wait for a slot if pool is full
+                while len(futures) >= num_slots:
+                    done, _ = wait(set(futures), return_when=FIRST_COMPLETED)
+                    for f in done:
+                        f.result()
+                        del futures[f]
+
+                # Check skip with most up-to-date state
+                with lock:
+                    skip = should_skip(var["combo"], failed, succeeded, options)
+                if skip:
+                    skipped_count[0] += 1
+                    continue
+
+                f = pool.submit(_job_worker, var)
+                futures[f] = var
+                inflight[tk] = f
+
+            remaining = deferred
+            if remaining and futures:
                 done, _ = wait(set(futures), return_when=FIRST_COMPLETED)
                 for f in done:
                     f.result()
                     del futures[f]
-
-            # Check skip with most up-to-date state
-            with lock:
-                skip = should_skip(var["combo"], failed, succeeded, options)
-            if skip:
-                skipped_count[0] += 1
-                continue
-
-            f = pool.submit(_job_worker, var)
-            futures[f] = var
-            inflight[tk] = f
 
         # Drain remaining futures
         for f in list(futures):
