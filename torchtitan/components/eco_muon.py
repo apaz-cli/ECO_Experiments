@@ -113,12 +113,17 @@ class ECOMuon(Optimizer):
     def __init__(
         self,
         params,
+        # Muon hparams (2D weight matrices)
         lr: float = 3e-4,
         momentum: float = 0.95,
         ns_steps: int = 5,
+        weight_decay: float = 0.0,
+        # AdamW hparams (1D params: biases, norms, embeddings)
+        adam_lr: float = 3e-3,
         adam_betas: tuple[float, float] = (0.9, 0.999),
         adam_eps: float = 1e-8,
-        weight_decay: float = 0.0,
+        adam_weight_decay: float = 0.0,
+        # shared ECO / dtype params
         optim_state_dtype: torch.dtype = torch.float32,
         optim_compute_dtype: torch.dtype = torch.float32,
         eco_enabled: bool = True,
@@ -133,6 +138,8 @@ class ECOMuon(Optimizer):
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
+        if adam_lr < 0.0:
+            raise ValueError(f"Invalid adam_lr: {adam_lr}")
         if not 0.0 <= momentum < 1.0:
             raise ValueError(f"Invalid momentum: {momentum}")
         if ns_steps < 1:
@@ -149,6 +156,11 @@ class ECOMuon(Optimizer):
                 f"Must be one of: naive_sgdm, frobenius, jacobian, pre_ns"
             )
 
+        # Split params into two groups: Muon (dim>=2) and AdamW (dim<2)
+        params_list = list(params)
+        muon_params = [p for p in params_list if p.dim() >= 2]
+        adam_params = [p for p in params_list if p.dim() < 2]
+
         defaults = dict(
             lr=lr,
             momentum=momentum,
@@ -158,8 +170,17 @@ class ECOMuon(Optimizer):
             weight_decay=weight_decay,
             optim_state_dtype=optim_state_dtype,
             optim_compute_dtype=optim_compute_dtype,
+            _is_adam_group=False,
         )
-        super().__init__(params, defaults)
+        # Pass both groups as a list of dicts so PyTorch doesn't reject empty params.
+        # PyTorch's Optimizer.__init__ treats a list of dicts as pre-formed param groups.
+        super().__init__(
+            [
+                {"params": muon_params, "lr": lr, "weight_decay": weight_decay, "_is_adam_group": False},
+                {"params": adam_params, "lr": adam_lr, "weight_decay": adam_weight_decay, "_is_adam_group": True},
+            ],
+            defaults,
+        )
 
         self._eco_enabled = eco_enabled
         self._eco_approach = eco_approach
@@ -178,6 +199,7 @@ class ECOMuon(Optimizer):
         for group in self.param_groups:
             group.setdefault("optim_state_dtype", torch.float32)
             group.setdefault("optim_compute_dtype", torch.float32)
+            group.setdefault("_is_adam_group", False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -214,14 +236,15 @@ class ECOMuon(Optimizer):
         }
 
         for group in self.param_groups:
+            is_adam = group["_is_adam_group"]
             lr = group["lr"]
+            weight_decay = group["weight_decay"]
+            optim_state_dtype = group["optim_state_dtype"]
+            optim_compute_dtype = group["optim_compute_dtype"]
             momentum = group["momentum"]
             ns_steps = group["ns_steps"]
             adam_betas = group["adam_betas"]
             adam_eps = group["adam_eps"]
-            weight_decay = group["weight_decay"]
-            optim_state_dtype = group["optim_state_dtype"]
-            optim_compute_dtype = group["optim_compute_dtype"]
 
             for param in group["params"]:
                 if param.grad is None:
@@ -235,13 +258,11 @@ class ECOMuon(Optimizer):
                 state = self.state[param]
                 if len(state) == 0:
                     state["step"] = torch.tensor(0.0)
-                    # For 2D params: Muon momentum
-                    # For 1D params: Adam exp_avg and exp_avg_sq
-                    if param.dim() >= 2:
-                        state["momentum_buffer"] = torch.zeros_like(param, dtype=optim_state_dtype)
-                    else:
+                    if is_adam:
                         state["exp_avg"] = torch.zeros_like(param, dtype=optim_state_dtype)
                         state["exp_avg_sq"] = torch.zeros_like(param, dtype=optim_state_dtype)
+                    else:
+                        state["momentum_buffer"] = torch.zeros_like(param, dtype=optim_state_dtype)
                     # Initialize master weights if requested
                     if self._master_weights_dtype is not None:
                         state["master_weights"] = param.detach().clone().to(self._master_weights_dtype)
@@ -249,8 +270,13 @@ class ECOMuon(Optimizer):
                 state["step"] += 1
                 step = state["step"].item()
 
-                # Dispatch: 2D params use Muon, 1D params use Adam
-                if param.dim() >= 2:
+                # Dispatch: Adam group uses AdamW, Muon group uses Muon
+                if is_adam:
+                    self._step_adam(
+                        param, grad, state["exp_avg"], state["exp_avg_sq"],
+                        lr, adam_betas, adam_eps, weight_decay, step,
+                    )
+                else:
                     if self._quantize_weights:
                         self._step_muon_simulated_quant(
                             param, grad, state["momentum_buffer"],
@@ -268,12 +294,6 @@ class ECOMuon(Optimizer):
                             param, grad, state["momentum_buffer"],
                             lr, momentum, ns_steps, weight_decay,
                         )
-                else:
-                    # 1D params: use Adam
-                    self._step_adam(
-                        param, grad, state["exp_avg"], state["exp_avg_sq"],
-                        lr, adam_betas, adam_eps, weight_decay, step,
-                    )
 
         # Aggregate metrics
         if should_log:

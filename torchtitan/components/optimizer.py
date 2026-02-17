@@ -296,11 +296,7 @@ def build_optimizers(
             )
 
     name = optimizer_config.name
-    lr = optimizer_config.lr
-    beta1 = optimizer_config.beta1
-    beta2 = optimizer_config.beta2
-    eps = optimizer_config.eps
-    weight_decay = optimizer_config.weight_decay
+    adamw_cfg = optimizer_config.adamw
 
     optim_implementation = optimizer_config.implementation
     assert optim_implementation in ["fused", "foreach", "for-loop"]
@@ -309,10 +305,10 @@ def build_optimizers(
     foreach = optim_implementation == "foreach"
 
     optimizer_kwargs = {
-        "lr": lr,
-        "betas": (beta1, beta2),
-        "eps": eps,
-        "weight_decay": weight_decay,
+        "lr": adamw_cfg.lr,
+        "betas": (adamw_cfg.beta1, adamw_cfg.beta2),
+        "eps": adamw_cfg.eps,
+        "weight_decay": adamw_cfg.weight_decay,
         "fused": fused,
         "foreach": foreach,
     }
@@ -375,12 +371,17 @@ def build_optimizers(
         optimizer_kwargs.pop("betas", None)  # Muon uses adam_betas instead
         optimizer_kwargs.pop("eps", None)    # Muon uses adam_eps instead
 
-        # Muon-specific hyperparameters
-        optimizer_kwargs["momentum"] = getattr(optimizer_config, "momentum", 0.95)
-        optimizer_kwargs["ns_steps"] = 5
-        optimizer_kwargs["adam_betas"] = (beta1, beta2)  # For 1D params
-        optimizer_kwargs["adam_eps"] = eps
-        optimizer_kwargs["adam_eps"] = eps
+        # Muon-specific hyperparameters from nested muon config
+        muon_cfg = optimizer_config.muon
+        optimizer_kwargs["lr"] = muon_cfg.lr
+        optimizer_kwargs["momentum"] = muon_cfg.momentum
+        optimizer_kwargs["ns_steps"] = muon_cfg.ns_steps
+        optimizer_kwargs["weight_decay"] = muon_cfg.weight_decay
+        # AdamW hparams for 1D params
+        optimizer_kwargs["adam_lr"] = adamw_cfg.lr
+        optimizer_kwargs["adam_betas"] = (adamw_cfg.beta1, adamw_cfg.beta2)
+        optimizer_kwargs["adam_eps"] = adamw_cfg.eps
+        optimizer_kwargs["adam_weight_decay"] = adamw_cfg.weight_decay
 
         # Add dtype and ECO configuration from eco_config if available
         if eco_config is not None:

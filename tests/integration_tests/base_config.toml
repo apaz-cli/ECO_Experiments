@@ -26,6 +26,8 @@ hf_assets_path = "./tests/assets/tokenizer"
 
 [optimizer]
 name = "AdamW"
+
+[optimizer.adamw]
 lr = 8e-4
 eps = 1e-8
 

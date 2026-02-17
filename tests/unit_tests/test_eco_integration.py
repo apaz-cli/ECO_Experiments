@@ -109,7 +109,7 @@ class TestFullTrainingCycle:
         config = _make_config(
             "--optimizer.name", "ECOAdamW",
             "--eco.enabled",
-            "--optimizer.lr", "0.01",
+            "--optimizer.adamw.lr", "0.01",
         )
         parallel_dims = _build_parallel_dims(config)
         optimizers = build_optimizers(

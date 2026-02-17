@@ -24,6 +24,8 @@ hf_assets_path = "./assets/hf/Llama-3.1-8B"
 
 [optimizer]
 name = "ECOAdamW"
+
+[optimizer.adamw]
 lr = 3e-4
 beta1 = 0.9
 beta2 = 0.98

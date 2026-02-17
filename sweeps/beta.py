@@ -20,7 +20,7 @@ OPTIONS = {
     },
     "beta1": {
         "values": [0.8, 0.85, 0.9, 0.95, 0.99],
-        "flags": "--optimizer.beta1",
+        "flags": "--optimizer.adamw.beta1",
         "name": "b1",
     },
 }

@@ -21,6 +21,8 @@ hf_assets_path = "./tests/assets/tokenizer"
 
 [optimizer]
 name = "ECOAdamW"
+
+[optimizer.adamw]
 lr = 8e-4
 beta1 = 0.9
 beta2 = 0.98

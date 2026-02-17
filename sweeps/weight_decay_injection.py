@@ -36,8 +36,8 @@ OPTIONS = {
     "weight_decay": {
         "values": [0.0, 0.1],
         "flags": {
-            0.0: ["--optimizer.weight_decay", "0.0"],
-            0.1: ["--optimizer.weight_decay", "0.1"],
+            0.0: ["--optimizer.muon.weight_decay", "0.0"],
+            0.1: ["--optimizer.muon.weight_decay", "0.1"],
         },
         "name": "wd",
     },

@@ -18,7 +18,9 @@ BASE_CONFIG = "configs/experiments/master.toml"
 # momentum is Muon-only (default 0.95). weight_decay typically 0 for Muon.
 MUON_FLAGS = [
     "--optimizer.name", "ECOMuon",
-    "--optimizer.weight_decay", "0.0",
+    "--optimizer.muon.lr", "3e-4",
+    "--optimizer.muon.weight_decay", "0.0",
+    "--optimizer.adamw.lr", "3e-3",
     "--eco.approach", "frobenius",
 ]
 

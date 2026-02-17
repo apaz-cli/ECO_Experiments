@@ -137,25 +137,48 @@ class Model:
 
 
 @dataclass
+class MuonConfig:
+    lr: float = 3e-4
+    """Learning rate for 2D weight matrices (Muon path)."""
+
+    momentum: float = 0.95
+    """Momentum β for Muon."""
+
+    ns_steps: int = 5
+    """Number of Newton-Schulz iterations."""
+
+    weight_decay: float = 0.0
+    """Weight decay for Muon params."""
+
+
+@dataclass
+class AdamWConfig:
+    lr: float = 8e-4
+    """Learning rate for AdamW."""
+
+    beta1: float = 0.9
+    """First exponential moving average coefficient."""
+
+    beta2: float = 0.95
+    """Second exponential moving average coefficient."""
+
+    eps: float = 1e-8
+    """Epsilon for numerical stability."""
+
+    weight_decay: float = 0.1
+    """Weight decay coefficient."""
+
+
+@dataclass
 class Optimizer:
     name: str = "AdamW"
     """Optimizer to use"""
 
-    lr: float = 8e-4
-    """Learning rate to use"""
+    muon: MuonConfig = field(default_factory=MuonConfig)
+    """Hyperparameters for Muon sub-optimizer (2D weight matrices). Only used when optimizer.name="ECOMuon"."""
 
-    beta1: float = 0.9
-    beta2: float = 0.95
-    """Exponential moving average hyperparameters to use"""
-
-    momentum: float = 0.95
-    """Momentum coefficient for Muon optimizer (only used when optimizer.name="ECOMuon")"""
-
-    eps: float = 1e-8
-    """Epsilon value to use"""
-
-    weight_decay: float = 0.1
-    """Weight decay to use"""
+    adamw: AdamWConfig = field(default_factory=AdamWConfig)
+    """Hyperparameters for AdamW sub-optimizer (all params for AdamW/ECOAdamW; 1D params for ECOMuon)."""
 
     implementation: Literal["for-loop", "foreach", "fused"] = "fused"
     """
@@ -210,7 +233,7 @@ class LRScheduler:
     """
     Min lr ratio for lr scheduler.
     If provided, the range of decay factor is scaled from 1 to `min_lr_factor`
-    to ensure the learning rate does not drop below `optimizer.lr * lr_scheduler.min_lr_factor`.
+    to ensure the learning rate does not drop below `initial_lr * lr_scheduler.min_lr_factor`.
     """
 
     warmup_init_factor: float = 0.0

@@ -20,7 +20,7 @@
 #   lr_peak = 1.2e-3 × min(1, 50/30) = 1.2e-3 × 1 = 1.2e-3
 #
 # Override via CLI (example for 100M):
-#   --model.flavor 100M --optimizer.lr 6e-4 --training.steps 38147 --lr_scheduler.warmup_steps 3815
+#   --model.flavor 100M --optimizer.adamw.lr 6e-4 --training.steps 38147 --lr_scheduler.warmup_steps 3815
 #
 # Based on ECO paper hyperparameters:
 #   - AdamW, beta1=0.9, beta2=0.98, eps=1e-9, weight_decay=0.1, grad clip 1.0
@@ -49,6 +49,8 @@ converters = ["activation_quant"]
 
 [optimizer]
 name = "ECOAdamW"
+
+[optimizer.adamw]
 lr = 1.2e-3  # Override per model size: 1.2e-3 * min(1, 50M / N_params) (capped at 1.2e-3 for N <= 50M)
 beta1 = 0.9
 beta2 = 0.98

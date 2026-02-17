@@ -34,6 +34,8 @@ hf_assets_path = "./assets/tokenizers/t5-base"
 
 [optimizer]
 name = "ECOAdamW"
+
+[optimizer.adamw]
 lr = 6e-4  # Override per model size: 6e-4 for 100M, 1.5e-4 for 430M, etc.
 beta1 = 0.9
 beta2 = 0.98

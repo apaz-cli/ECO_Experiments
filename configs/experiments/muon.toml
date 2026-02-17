@@ -33,12 +33,18 @@ hf_assets_path = "./assets/tokenizers/t5-base"
 
 [optimizer]
 name = "ECOMuon"
+
+[optimizer.muon]
 lr = 3e-4  # Muon typically uses lower LR than Adam
 momentum = 0.95
-beta1 = 0.9  # For 1D params (Adam fallback)
-beta2 = 0.999  # For 1D params (Adam fallback)
-eps = 1e-8
 weight_decay = 0.0  # Muon typically doesn't use weight decay
+
+[optimizer.adamw]
+lr = 3e-3  # For 1D params (biases, norms, embeddings)
+beta1 = 0.9
+beta2 = 0.999
+eps = 1e-8
+weight_decay = 0.0
 
 [lr_scheduler]
 warmup_steps = 3815  # Override: 10% of total steps
