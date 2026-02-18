@@ -57,8 +57,8 @@ global_batch_size = 256
 seq_len = 512
 max_norm = 1.0
 steps = 38147  # Override per model: 50N tokens / (256*512)
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -89,8 +89,8 @@ master_weights_dtype = "none"  # ["none", "fp32", "bf16"] - none=pure ECO, fp32=
 
 [validation]
 enable = false
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 seq_len = 512
 freq = 2000
 steps = -1

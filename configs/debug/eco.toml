@@ -46,10 +46,10 @@ local_batch_size = 8
 seq_len = 2048
 max_norm = 1.0
 steps = 20000
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 
 [validation]
 enable = false
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"

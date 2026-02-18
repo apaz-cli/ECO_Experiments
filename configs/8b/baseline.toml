@@ -42,8 +42,8 @@ local_batch_size = 1
 seq_len = 8192
 max_norm = 1.0
 steps = 1000
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -73,7 +73,7 @@ quant_dtype = "bf16"
 
 [validation]
 enable = false
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 freq = 100
 steps = 1200

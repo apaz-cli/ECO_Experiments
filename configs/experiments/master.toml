@@ -70,7 +70,7 @@ seq_len = 512
 max_norm = 1.0
 steps = 11446  # Override per model size: (100 * N_params / (global_batch_size * seq_len))
 dataset = "c4"
-dataset_path = "/mnt/skraid0/c4"
+dataset_path = "/home/aaron/c4"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -101,7 +101,7 @@ stochastic_rounding = true
 [validation]
 enable = false
 dataset = "c4_validation"
-dataset_path = "/mnt/skraid0/c4"
+dataset_path = "/home/aaron/c4"
 seq_len = 512
 freq = 11446
 steps = -1

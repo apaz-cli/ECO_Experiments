@@ -53,8 +53,8 @@ global_batch_size = 256
 seq_len = 512
 max_norm = 1.0
 steps = 38147  # Override per model: 50N tokens / (256*512)
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 
 [parallelism]
 data_parallel_replicate_degree = 1
@@ -84,8 +84,8 @@ activation_dtype = "none"    # No activation quantization for BF16 baseline
 
 [validation]
 enable = false
-dataset = "fineweb_edu_sample10bt"
-dataset_path = "/mnt/skraid0/fineweb"
+dataset = "c4"
+dataset_path = "/home/aaron/c4/"
 seq_len = 512
 freq = 2000
 steps = -1

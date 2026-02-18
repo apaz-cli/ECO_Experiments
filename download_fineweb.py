@@ -5,7 +5,7 @@ import os
 
 from datasets import DownloadConfig, load_dataset
 
-DEST = "/mnt/skraid0/fineweb"
+DEST = "/home/aaron/c4/"
 NUM_PROC = min(os.cpu_count() or 1, 64)
 
 print("Downloading HuggingFaceFW/fineweb-edu (sample-10BT)...")

@@ -6,14 +6,14 @@ Train: streams ~23M documents (~10B tokens) from allenai/c4 "en" config.
 Validation: full C4-en validation split (~365K docs).
 
 Estimated disk usage: 10-15GB Arrow format.
-Destination: /mnt/skraid0/c4/{train,validation}/
+Destination: /home/aaron/c4/{train,validation}/
 """
 
 import os
 
 from datasets import DownloadConfig, load_dataset
 
-DEST = "/mnt/skraid0/c4"
+DEST = "/home/aaron/c4"
 TRAIN_DOCS = 23_000_000  # ~10B tokens at ~430 tokens/doc average
 NUM_PROC = min(os.cpu_count() or 1, 64)
 DOWNLOAD_CONFIG = DownloadConfig(num_proc=NUM_PROC)

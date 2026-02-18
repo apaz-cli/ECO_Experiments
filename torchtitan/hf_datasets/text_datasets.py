@@ -27,7 +27,7 @@ def _load_c4_dataset(dataset_path: str, split: str):
     """Load C4 dataset with default configuration.
 
     If dataset_path points to a local directory containing a subdirectory
-    named after the split (e.g. /mnt/skraid0/c4/train), load from disk.
+    named after the split, load from disk.
     Otherwise, stream from HuggingFace Hub.
     """
     local_split_path = os.path.join(dataset_path, split)
