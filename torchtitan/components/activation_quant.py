@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from torchtitan.config import JobConfig
 from torchtitan.distributed import ParallelDims
 from torchtitan.protocols.model_converter import ModelConverter, register_model_converter
+from torchtitan.components.quant_gemm import HardwareQuantLinear, _HARDWARE_GEMM_DTYPES
 
 
 __all__ = ["ActivationQuantConverter", "ActivationQuantLinear"]
@@ -153,7 +154,10 @@ class ActivationQuantConverter(ModelConverter):
             # Depth-first: convert children before checking this child.
             self._convert_with_fqn(root, child, fqn)
             if isinstance(child, nn.Linear) and fqn.startswith("layers."):
-                wrapped = ActivationQuantLinear(child, self.quant_dtype)
+                if self.quant_dtype in _HARDWARE_GEMM_DTYPES:
+                    wrapped = HardwareQuantLinear(child, "fp8")
+                else:
+                    wrapped = ActivationQuantLinear(child, self.quant_dtype)
                 setattr(module, name, wrapped)
 
     def post_optimizer_hook(self, model, **kwargs):

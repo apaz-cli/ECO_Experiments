@@ -1,47 +1,37 @@
 #!/tmp/eco/run_sweep.py
-# Smoke test: 2x2x2x2x2 = 32 runs on debugmodel.
-# Validates that all ECO config combos run without blowing up.
+# Smoke test: one run per treatment on debugmodel, for both Adam and Muon.
+# Validates that all treatment configs (paper + extra) run without blowing up.
+#
+# Note: treatments with activation_quant=True set --eco.activation-dtype fp8
+# but baseline.toml has no model.converters, so activation quant is a no-op.
+from _treatments import TREATMENTS, _flags
+
 BASE_CONFIG = "configs/debug/baseline.toml"
 
+MUON_FLAGS = [
+    "--optimizer.name", "ECOMuon",
+    "--optimizer.muon.lr", "3e-4",
+    "--optimizer.muon.weight_decay", "0.1",
+    "--optimizer.adamw.lr", "3e-3",
+    "--eco.approach", "frobenius",
+]
+
+OPTIMIZERS = {
+    "adam": [],
+    "muon": MUON_FLAGS,
+}
+
 OPTIONS = {
-    "eco_enabled": {
-        "values": [False, True],
-        "flags": {
-            False: ["--eco.no-enabled"],
-            True: ["--eco.enabled"],
-        },
-        "name": "eco",
+    "optimizer": {
+        "values": list(OPTIMIZERS.keys()),
+        "flags": OPTIMIZERS,
+        "name": "opt",
     },
-    "quant_dtype": {
-        "values": ["bf16", "fp8"],
+    "treatment": {
+        "values": list(TREATMENTS.keys()),
         "flags": {
-            "bf16": ["--eco.quant-dtype", "bf16"],
-            "fp8": ["--eco.quant-dtype", "fp8"],
+            name: _flags(*args) for name, args in TREATMENTS.items()
         },
-        "name": "qdt",
-    },
-    "stochastic_rounding": {
-        "values": [False, True],
-        "flags": {
-            False: ["--eco.no-stochastic-rounding"],
-            True: ["--eco.stochastic-rounding"],
-        },
-        "name": "sr",
-    },
-    "optim_state_dtype": {
-        "values": ["fp32", "bf16"],
-        "flags": {
-            "fp32": ["--eco.optim-state-dtype", "fp32"],
-            "bf16": ["--eco.optim-state-dtype", "bf16"],
-        },
-        "name": "osdt",
-    },
-    "optim_compute_dtype": {
-        "values": ["fp32", "bf16"],
-        "flags": {
-            "fp32": ["--eco.optim-compute-dtype", "fp32"],
-            "bf16": ["--eco.optim-compute-dtype", "bf16"],
-        },
-        "name": "ocdt",
+        "name": "tmt",
     },
 }

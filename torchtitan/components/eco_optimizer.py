@@ -182,28 +182,34 @@ class ECOAdamW(Optimizer):
                     state["exp_avg_sq"] = torch.zeros_like(param, dtype=optim_state_dtype)
                     # Initialize master weights if requested
                     if self._master_weights_dtype is not None:
-                        # Store original unquantized weights as initial master weights
-                        state["master_weights"] = param.detach().clone().to(self._master_weights_dtype)
-                        # Quantize param.data so the first forward pass uses quantized weights
-                        # (otherwise first forward uses unquantized, all others use quantized)
-                        if self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
-                            param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
-                            theta_hat = self._requantize(param_f, self._quant_dtype, self._stochastic_rounding)
-                            param.data.copy_(theta_hat.to(param.dtype))
+                        if isinstance(param, QuantizedTensor):
+                            # Dequantize FP8 to get initial high-precision values.
+                            # QuantizedTensor is already in its quantized form; no
+                            # pre-quantization of param needed.
+                            state["master_weights"] = param.dequantize().clone().to(self._master_weights_dtype)
+                        else:
+                            # Store original unquantized weights as initial master weights
+                            state["master_weights"] = param.detach().clone().to(self._master_weights_dtype)
+                            # Quantize param.data so the first forward pass uses quantized weights
+                            # (otherwise first forward uses unquantized, all others use quantized)
+                            if self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
+                                param_f = param.data.to(optim_compute_dtype) if param.dtype != optim_compute_dtype else param.data.clone()
+                                theta_hat = self._requantize(param_f, self._quant_dtype, self._stochastic_rounding)
+                                param.data.copy_(theta_hat.to(param.dtype))
 
                 exp_avg = state["exp_avg"]
                 exp_avg_sq = state["exp_avg_sq"]
                 state["step"] += 1
                 step = state["step"].item()
 
-                if self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
-                    self._step_simulated_quant(
+                if isinstance(param, QuantizedTensor):
+                    self._step_quantized(
                         param, grad, exp_avg, exp_avg_sq,
                         lr, beta1, beta2, eps, weight_decay, step,
                         optim_compute_dtype, should_log, layer_metrics,
                     )
-                elif isinstance(param, QuantizedTensor):
-                    self._step_quantized(
+                elif self._quantize_weights and param.dim() >= 2 and id(param) not in self._exclude_from_quant:
+                    self._step_simulated_quant(
                         param, grad, exp_avg, exp_avg_sq,
                         lr, beta1, beta2, eps, weight_decay, step,
                         optim_compute_dtype, should_log, layer_metrics,
@@ -370,12 +376,20 @@ class ECOAdamW(Optimizer):
         should_log: bool,
         layer_metrics: dict[str, list[float]],
     ):
-        # 1. Dequantize and upcast to optim_compute_dtype (FP32 by default).
+        # 1. Get high-precision starting point for Adam update.
+        #    For master-weights mode: start from stored master weights (θ_mw).
+        #    For pure ECO mode:       dequantize FP8 param (θ̂ from last step).
         #    The paper requires θ̃ in "high precision" so the error
         #    e = θ̃ − θ_hat is computed without catastrophic cancellation.
-        param_dequant = param.dequantize()
-        if param_dequant.dtype != optim_compute_dtype:
-            param_dequant = param_dequant.to(optim_compute_dtype)
+        state = self.state[param]
+        has_master_weights = "master_weights" in state
+
+        if has_master_weights:
+            mw = state["master_weights"]
+            param_f = mw.to(optim_compute_dtype) if mw.dtype != optim_compute_dtype else mw.clone()
+        else:
+            param_dequant = param.dequantize()
+            param_f = param_dequant.to(optim_compute_dtype) if param_dequant.dtype != optim_compute_dtype else param_dequant
 
         grad_compute = grad if grad.dtype == optim_compute_dtype else grad.to(optim_compute_dtype)
 
@@ -399,21 +413,21 @@ class ECOAdamW(Optimizer):
         denom = (exp_avg_sq_c.sqrt() / math.sqrt(bias_correction2)).add_(eps)
 
         if weight_decay != 0:
-            param_dequant.mul_(1 - lr * weight_decay)
+            param_f.mul_(1 - lr * weight_decay)
 
-        param_dequant.addcdiv_(exp_avg_c, denom, value=-step_size)
+        param_f.addcdiv_(exp_avg_c, denom, value=-step_size)
 
-        # θ̃ is now in param_dequant — the ideal updated weight BEFORE requant.
+        # θ̃ is now in param_f — the ideal updated weight BEFORE requant.
 
         # 3. Requantize θ̃ → θ_hat (optionally with stochastic rounding)
         quant_str = _DTYPE_TO_QUANT_STR[param._quant_dtype]
         theta_hat = self._requantize(
-            param_dequant, quant_str, self._stochastic_rounding
+            param_f, quant_str, self._stochastic_rounding
         )
 
         # 4. ECO injection (Algorithm 3)
         if self._eco_enabled:
-            error = param_dequant - theta_hat  # e = θ̃ − θ_hat
+            error = param_f - theta_hat  # e = θ̃ − θ_hat
 
             injection_coeff = (bias_correction1 / lr) * (1.0 - 1.0 / beta1)
             if self._include_weight_decay_in_injection and weight_decay != 0:
@@ -427,12 +441,12 @@ class ECOAdamW(Optimizer):
 
             # 5. Heuristic diagnostics
             if should_log:
-                prev_error = self.state[param].get("prev_error")
+                prev_error = state.get("prev_error")
                 if prev_error is not None:
                     self._compute_heuristics(
                         layer_metrics, prev_error, error,
                     )
-                self.state[param]["prev_error"] = error.detach().clone()
+                state["prev_error"] = error.detach().clone()
 
         # Write momentum back if we changed dtype
         if copy_back:
@@ -445,6 +459,10 @@ class ECOAdamW(Optimizer):
         )
         param._data.copy_(new_q._data)
         param._scale.copy_(new_q._scale)
+
+        # 7. Update master weights with θ̃ (pre-quantization ideal value)
+        if has_master_weights:
+            state["master_weights"].copy_(param_f.to(state["master_weights"].dtype))
 
     # ------------------------------------------------------------------
     # Requantization (with optional stochastic rounding)

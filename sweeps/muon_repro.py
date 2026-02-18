@@ -19,7 +19,7 @@ BASE_CONFIG = "configs/experiments/master.toml"
 MUON_FLAGS = [
     "--optimizer.name", "ECOMuon",
     "--optimizer.muon.lr", "3e-4",
-    "--optimizer.muon.weight_decay", "0.0",
+    "--optimizer.muon.weight_decay", "0.1",
     "--optimizer.adamw.lr", "3e-3",
     "--eco.approach", "frobenius",
 ]

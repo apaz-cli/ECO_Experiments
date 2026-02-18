@@ -24,6 +24,7 @@ from torchtitan.components.activation_quant import (
     ActivationQuantLinear,
     _ActivationQuantLinearFn,
 )
+from torchtitan.components.quant_gemm import HardwareQuantLinear
 
 
 # ---------------------------------------------------------------------------
@@ -85,11 +86,12 @@ class TestActivationQuantConverter:
         model = _FakeTransformer()
         _make_converter("fp8").convert(model)
 
-        # Linears inside layers.* should be wrapped
-        assert isinstance(model.layers["0"].wq, ActivationQuantLinear)
-        assert isinstance(model.layers["0"].wk, ActivationQuantLinear)
-        assert isinstance(model.layers["0"].ffn, ActivationQuantLinear)
-        assert isinstance(model.layers["1"].wq, ActivationQuantLinear)
+        # Linears inside layers.* should be wrapped with HardwareQuantLinear
+        # (FP8 dtype dispatches to hardware GEMM path, not ActivationQuantLinear)
+        assert isinstance(model.layers["0"].wq, HardwareQuantLinear)
+        assert isinstance(model.layers["0"].wk, HardwareQuantLinear)
+        assert isinstance(model.layers["0"].ffn, HardwareQuantLinear)
+        assert isinstance(model.layers["1"].wq, HardwareQuantLinear)
 
     def test_skips_output_projection(self):
         """Paper: 'excluding the embedding and output layers'."""
@@ -132,7 +134,8 @@ class TestActivationQuantConverter:
         _make_converter("fp8").convert(model)
 
         wrapped = model.layers["0"]
-        assert isinstance(wrapped, ActivationQuantLinear)
+        # FP8 dtype → HardwareQuantLinear
+        assert isinstance(wrapped, HardwareQuantLinear)
         assert wrapped.bias is None
 
     def test_state_dict_keys_unchanged(self):
@@ -420,7 +423,13 @@ class TestCompositionWithECO:
 
 class TestConvergence:
     def test_activation_quant_does_not_prevent_convergence(self):
-        """A model with activation quant should converge on a simple task."""
+        """A model with activation quant should converge on a simple task.
+
+        Note: HardwareQuantLinear uses QuantizedTensor weights, which require
+        ECOAdamW (not standard AdamW) for correct in-place parameter updates.
+        """
+        from torchtitan.components.eco_optimizer import ECOAdamW
+
         torch.manual_seed(42)
 
         model = nn.Module()
@@ -435,7 +444,9 @@ class TestConvergence:
 
         _make_converter("fp8").convert(model)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        # ECOAdamW correctly handles QuantizedTensor weights (HardwareQuantLinear)
+        # via _step_quantized.  Standard AdamW in-place ops don't update _data.
+        optimizer = ECOAdamW(model.parameters(), lr=1e-3, eco_enabled=True)
 
         x = torch.randn(128, 16)
         y = torch.sin(x[:, 0:1]) + 0.5 * x[:, 1:2]
