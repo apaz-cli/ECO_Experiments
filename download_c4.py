@@ -11,10 +11,12 @@ Destination: /mnt/skraid0/c4/{train,validation}/
 
 import os
 
-from datasets import load_dataset
+from datasets import DownloadConfig, load_dataset
 
 DEST = "/mnt/skraid0/c4"
 TRAIN_DOCS = 23_000_000  # ~10B tokens at ~430 tokens/doc average
+NUM_PROC = min(os.cpu_count() or 1, 64)
+DOWNLOAD_CONFIG = DownloadConfig(num_proc=NUM_PROC)
 
 
 def download_train():
@@ -24,9 +26,15 @@ def download_train():
         return
 
     print(f"Streaming allenai/c4 (en) train split, taking {TRAIN_DOCS:,} documents...")
-    ds = load_dataset("allenai/c4", name="en", split=f"train[:{TRAIN_DOCS}]")
+    ds = load_dataset(
+        "allenai/c4",
+        name="en",
+        split=f"train[:{TRAIN_DOCS}]",
+        num_proc=NUM_PROC,
+        download_config=DOWNLOAD_CONFIG,
+    )
     print(f"Loaded {len(ds):,} documents. Saving to {train_path}...")
-    ds.save_to_disk(train_path)
+    ds.save_to_disk(train_path, num_proc=NUM_PROC)
     print(f"Train split saved.")
 
 
@@ -37,9 +45,15 @@ def download_validation():
         return
 
     print("Downloading allenai/c4 (en) validation split...")
-    ds = load_dataset("allenai/c4", name="en", split="validation")
+    ds = load_dataset(
+        "allenai/c4",
+        name="en",
+        split="validation",
+        num_proc=NUM_PROC,
+        download_config=DOWNLOAD_CONFIG,
+    )
     print(f"Loaded {len(ds):,} documents. Saving to {val_path}...")
-    ds.save_to_disk(val_path)
+    ds.save_to_disk(val_path, num_proc=NUM_PROC)
     print(f"Validation split saved.")
 
 
