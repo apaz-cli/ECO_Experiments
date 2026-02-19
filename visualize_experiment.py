@@ -8,6 +8,7 @@ for exploring loss curves across experimental axes.
 Usage:
     python visualize_experiment.py                      # newest experiment
     python visualize_experiment.py debug_smoke_...      # specific experiment
+    python visualize_experiment.py --open-browser
     python visualize_experiment.py --port 43801
 """
 
@@ -512,7 +513,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("experiment", nargs="?", help="experiment name or directory (default: newest)")
     parser.add_argument("--port", type=int, default=43801)
-    parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
 
     sweep_dir = find_sweep_dir(args.experiment)
@@ -525,7 +526,7 @@ def main():
     url = f"http://localhost:{args.port}"
     print(f"  Serving at {url}  (Ctrl+C to stop)")
 
-    if not args.no_browser:
+    if args.open_browser:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()
 
     HTTPServer(("", args.port), Handler).serve_forever()
