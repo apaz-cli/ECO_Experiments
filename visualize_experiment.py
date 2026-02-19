@@ -2,7 +2,7 @@
 """
 Sweep experiment visualizer.
 
-Parses training logs from a sweep and serves an interactive browser UI
+Loads training metrics from Aim and serves an interactive browser UI
 for exploring loss curves across experimental axes.
 
 Usage:
@@ -10,143 +10,114 @@ Usage:
     python visualize_experiment.py debug_smoke_...      # specific experiment
     python visualize_experiment.py --open-browser
     python visualize_experiment.py --port 43801
+    python visualize_experiment.py --aim-repo aim://host:port  # remote server
 """
 
 import argparse
-import importlib.util
-import itertools
 import json
-import re
+import math
+import os
 import sys
 import threading
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent
-SWEEPS_DIR = REPO_ROOT / "sweeps"
-OUTPUTS_DIR = REPO_ROOT / "outputs" / "sweeps"
-ANSI_RE = re.compile(r"\033\[[0-9;]*m")
-KV_RE = re.compile(r"\b(\w+):\s+([0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?|nan)\b")
+import aim as aim_sdk
+from aim.sdk.types import QueryReportMode
 
-
-# ── Data loading ──────────────────────────────────────────────────────────────
-
-def find_sweep_dir(arg):
-    """Return the sweep output directory for `arg`, defaulting to newest."""
-    if arg is None:
-        dirs = sorted(OUTPUTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime)
-        if not dirs:
-            sys.exit(f"No experiments found in {OUTPUTS_DIR}")
-        return dirs[-1]
-    p = Path(arg)
-    if p.is_dir():
-        return p
-    candidate = OUTPUTS_DIR / arg
-    if candidate.is_dir():
-        return candidate
-    sys.exit(f"Experiment directory not found: {arg}")
+# Default to the local .aim directory (direct RocksDB reads, no HTTP overhead).
+# Pass --aim-repo aim://host:port to use a remote server instead.
+DEFAULT_AIM_REPO = os.path.dirname(os.path.abspath(__file__))
 
 
-def load_sweep_options(sweep_dir):
-    """Import the sweep .py file and return (sweep_name, OPTIONS, EXCLUDE).
+# ── Aim data loading ───────────────────────────────────────────────────────────
 
-    The sweep name is inferred by stripping the _YYYYMMDD_HHMM timestamp suffix
-    from the experiment directory name.
+def _parse_tag_value(s):
+    """Convert a tag value string back to a typed Python value."""
+    if s == "True":  return True
+    if s == "False": return False
+    try:    return int(s)
+    except ValueError: pass
+    try:    return float(s)
+    except ValueError: pass
+    return s
+
+
+def list_experiments(repo_url):
+    """Return all Aim experiment names, sorted newest-first."""
+    repo = aim_sdk.Repo(repo_url)
+    latest = {}  # experiment name -> newest created_at seen
+    for run in repo.iter_runs():
+        if run.experiment:
+            t = run.created_at
+            if run.experiment not in latest or t > latest[run.experiment]:
+                latest[run.experiment] = t
+    return sorted(latest, key=lambda e: latest[e], reverse=True)
+
+
+def load_experiment_meta(experiment_name, repo_url):
+    """Return axes, run combos, and metric names — no metric data loaded.
+
+    Fast (a few seconds) because it only reads run metadata and metric names,
+    not the actual time-series values.  Metric data is fetched on demand via
+    load_metric_data().
+
+    Returns {"experiment", "axes", "runs", "metricNames"}.  Each run contains
+    {"name", "hash", "combo"}.  Combos are reconstructed from Aim tags
+    ("key=value" strings set by run_sweep.py).
     """
-    exp_name = sweep_dir.name
-    sweep_name = re.sub(r"_\d{8}_\d{4}$", "", exp_name)
-    sweep_file = SWEEPS_DIR / f"{sweep_name}.py"
-    if not sweep_file.exists():
-        sys.exit(f"Sweep file not found: {sweep_file}\n"
-                 f"(inferred from experiment name: {exp_name})")
-    spec = importlib.util.spec_from_file_location(sweep_name, sweep_file)
-    mod = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(SWEEPS_DIR))
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.path.pop(0)
-    return sweep_name, mod.OPTIONS, getattr(mod, "EXCLUDE", None)
+    repo = aim_sdk.Repo(repo_url)
+    aim_runs = [r for r in repo.iter_runs() if r.experiment == experiment_name]
+
+    axis_values = {}
+    runs        = []
+    metric_names = set()
+
+    for run in aim_runs:
+        combo = {}
+        for tag in run.tags:
+            if '=' in tag:
+                k, v = tag.split('=', 1)
+                combo[k] = _parse_tag_value(v)
+        for k, v in combo.items():
+            axis_values.setdefault(k, set()).add(v)
+        runs.append({"name": run.name, "hash": run.hash, "combo": combo})
+        # Collect metric names only — no .dataframe() calls, so this stays fast.
+        for metric in run.metrics():
+            if not metric.name.startswith('__'):
+                metric_names.add(metric.name)
+
+    def val_sort_key(v):
+        if isinstance(v, bool):         return (0, str(v))
+        if isinstance(v, (int, float)): return (1, v)
+        return                                  (2, str(v))
+
+    axes = {k: sorted(vs, key=val_sort_key) for k, vs in axis_values.items()}
+    return {"experiment": experiment_name, "axes": axes, "runs": runs,
+            "metricNames": sorted(metric_names)}
 
 
-def generate_name_to_combo(sweep_name, options, exclude_fn):
-    """Map run directory names → hyperparameter combos.
+def load_metric_data(experiment_name, metric_name, repo_url):
+    """Load one metric's values for all runs in an experiment (~1–2 s).
 
-    Replicates run_sweep.py's naming logic: non-singular axes are sorted
-    alphabetically first; singular (diagnostic) axes follow. Each axis with a
-    "name" key contributes a segment like "lr0.001" or "muonT" to the dir name.
+    Uses Aim's AQL query to filter to a single metric name, skipping all
+    other metrics.  Returns {run_hash: {"steps": [...], "values": [...]}}.
     """
-    lex_keys  = sorted(k for k in options if not options[k].get("singular"))
-    diag_keys = sorted(k for k in options if     options[k].get("singular"))
-    all_keys  = lex_keys + diag_keys
-
-    mapping = {}
-    for vals in itertools.product(*(options[k]["values"] for k in all_keys)):
-        combo = dict(zip(all_keys, vals))
-        if exclude_fn and exclude_fn(combo):
+    repo = aim_sdk.Repo(repo_url)
+    q = repo.query_metrics(
+        f'run.experiment == "{experiment_name}" and metric.name == "{metric_name}"',
+        report_mode=QueryReportMode.DISABLED,
+    )
+    result = {}
+    for metric in q.iter():
+        df = metric.dataframe()
+        if df.empty:
             continue
-        parts = [
-            f"{options[k]['name']}{'T' if v is True else 'F' if v is False else v}"
-            for k, v in combo.items() if options[k].get("name") is not None
-        ]
-        name = f"{sweep_name}_{'_'.join(parts) if parts else 'default'}"
-        mapping[name] = combo
-    return mapping
-
-
-def parse_training_log(log_path):
-    """Parse a training.log and return (steps, metrics).
-
-    metrics maps metric name → list of float|None (one entry per logged step).
-    Non-finite values (nan) are stored as None for valid JSON serialization.
-    """
-    steps, metrics = [], {}
-    with open(log_path, errors="replace") as f:
-        for line in f:
-            if "step:" not in line:
-                continue
-            clean = ANSI_RE.sub("", line).replace(",", "")  # strip ANSI + thousand separators
-            kvs = dict(KV_RE.findall(clean))
-            if "step" not in kvs or "loss" not in kvs:
-                continue
-            try:
-                step = int(float(kvs.pop("step")))
-            except ValueError:
-                continue
-            steps.append(step)
-            for k, v in kvs.items():
-                try:
-                    val = float(v)
-                    metrics.setdefault(k, []).append(None if val != val else val)  # nan != nan
-                except ValueError:
-                    metrics.setdefault(k, []).append(None)
-    return steps, metrics
-
-
-def load_experiment(sweep_dir):
-    """Parse all runs in a sweep directory and return the experiment data dict."""
-    sweep_name, options, exclude_fn = load_sweep_options(sweep_dir)
-    name_to_combo = generate_name_to_combo(sweep_name, options, exclude_fn)
-
-    candidates = [
-        d for d in sorted(sweep_dir.iterdir())
-        if d.is_dir() and (d / "training.log").exists() and d.name in name_to_combo
-    ]
-    runs = []
-    for i, run_dir in enumerate(candidates, 1):
-        print(f"  Parsing run {i}/{len(candidates)}: {run_dir.name}", flush=True)
-        steps, metrics = parse_training_log(run_dir / "training.log")
-        if steps:
-            runs.append({"name": run_dir.name, "combo": name_to_combo[run_dir.name],
-                         "steps": steps, "metrics": metrics})
-
-    return {
-        "experiment": sweep_dir.name,
-        "axes": {k: opts["values"] for k, opts in options.items()},
-        "runs": runs,
-    }
+        values = [None if (isinstance(v, float) and math.isnan(v)) else v
+                  for v in df['value'].tolist()]
+        result[metric.run.hash] = {"steps": df['step'].tolist(), "values": values}
+    return result
 
 
 # ── HTML / JS ─────────────────────────────────────────────────────────────────
@@ -309,15 +280,13 @@ const PALETTE = [
   "#aec7e8","#ffbb78","#98df8a","#ff9896","#c5b0d5",
 ];
 
-// Metrics shown first in the metric dropdown, in this order.
-const PREFERRED_METRICS = ["loss", "grad_norm", "tflops", "mfu", "tps"];
-
-let DATA        = null;  // experiment data loaded from /data.json
-let colorBy     = null;  // axis name to color by (set on load)
-let metric      = "loss";
-let smoothAlpha = 0;     // EMA alpha; 0 = disabled
-let filters     = {};    // axis → Set of visible values
-let METRIC_NAMES = [];   // ordered metric names, populated by buildMetricSelect
+let DATA         = null;  // experiment metadata from /data.json
+let METRIC_CACHE = {};    // metric_name → {run_hash: {steps, values}}, loaded on demand
+let colorBy      = null;  // axis name to color by (set on load)
+let metric       = "loss";
+let smoothAlpha  = 0;     // EMA alpha; 0 = disabled
+let filters      = {};    // axis → Set of visible values
+let METRIC_NAMES = [];    // populated by buildMetricSelect
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
@@ -331,7 +300,7 @@ let METRIC_NAMES = [];   // ordered metric names, populated by buildMetricSelect
     btn.title = dark ? "Switch to light mode" : "Switch to dark mode";
   }
 
-  applyTheme(localStorage.getItem("theme") === "dark");
+  applyTheme(localStorage.getItem("theme") !== "light");
 
   btn.addEventListener("click", () => {
     const dark = root.getAttribute("data-theme") !== "dark";
@@ -374,8 +343,9 @@ function lerpColor(t) {
 // Return a run-name → color map based on each run's final value of metricName.
 // Colors are scaled relative to all runs (not just visible ones) for consistency.
 function metricColorsForRuns(runs, metricName) {
+  const cache = METRIC_CACHE[metricName] || {};
   const finals = runs.map(r => {
-    const vals = r.metrics[metricName] || [];
+    const vals = (cache[r.hash] || {}).values || [];
     for (let i = vals.length - 1; i >= 0; i--)
       if (vals[i] !== null && isFinite(vals[i])) return vals[i];
     return null;
@@ -411,9 +381,10 @@ function visibleRuns() {
 // Compute y-axis range with a small pad. Always uses ALL runs (not just visible)
 // so the axis stays fixed when toggling checkboxes.
 function yRangeOf(runs) {
+  const cache = METRIC_CACHE[metric] || {};
   let lo = Infinity, hi = -Infinity;
   for (const r of runs)
-    for (const v of (r.metrics[metric] || []))
+    for (const v of ((cache[r.hash] || {}).values || []))
       if (isFinite(v)) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (!isFinite(lo)) return undefined;
   const pad = Math.max((hi - lo) * 0.05, 1e-6);
@@ -432,28 +403,30 @@ function buildChart() {
 
   if (isMetricColor) {
     const colorMap_ = metricColorsForRuns(DATA.runs, colorBy.slice(3));
-    getColor       = r     => colorMap_.get(r.name) || "#888";
-    getGroup       = r     => r.name;
-    showLegendFor  = ()    => false;      // no discrete legend for continuous color
-    legendGroupTitle = ()  => undefined;
+    getColor        = r     => colorMap_.get(r.name) || "#888";
+    getGroup        = r     => r.name;
+    showLegendFor   = ()    => false;      // no discrete legend for continuous color
+    legendGroupTitle = ()   => undefined;
   } else {
-    const cmap     = colorMap(DATA.axes[colorBy] || []);
+    const cmap      = colorMap(DATA.axes[colorBy] || []);
     const firstSeen = new Set();
-    getColor       = r     => cmap[r.combo[colorBy]] || "#888";
-    getGroup       = r     => String(r.combo[colorBy]);
-    // showLegendFor has a side effect: it tracks which groups have been seen
-    // so only the first trace per group gets a legend entry.
-    showLegendFor  = group => { const f = !firstSeen.has(group); if (f) firstSeen.add(group); return f; };
+    getColor        = r     => cmap[r.combo[colorBy]] || "#888";
+    getGroup        = r     => String(r.combo[colorBy]);
+    // showLegendFor tracks which groups have been seen so only the first
+    // trace per group gets a legend entry.
+    showLegendFor   = group => { const f = !firstSeen.has(group); if (f) firstSeen.add(group); return f; };
     legendGroupTitle = (group, isFirst) => isFirst ? { text: colorBy, font: { size: 11 } } : undefined;
   }
 
+  const mcache = METRIC_CACHE[metric] || {};
   const traces = runs.map(r => {
     const color   = getColor(r);
     const group   = getGroup(r);
     const isFirst = showLegendFor(group);
+    const mdata   = mcache[r.hash] || {};
     return {
-      x: r.steps,
-      y: ema(r.metrics[metric] || [], smoothAlpha),
+      x: mdata.steps  || [],
+      y: ema(mdata.values || [], smoothAlpha),
       mode: "lines",
       line: { color, width: 1.5 },
       name: group,
@@ -581,14 +554,7 @@ function buildColorBySelect() {
 }
 
 function buildMetricSelect() {
-  const allMetrics = new Set();
-  DATA.runs.forEach(r => Object.keys(r.metrics).forEach(k => allMetrics.add(k)));
-
-  // Preferred metrics first, then any extras in discovery order.
-  METRIC_NAMES = [
-    ...PREFERRED_METRICS.filter(m => allMetrics.has(m)),
-    ...[...allMetrics].filter(m => !PREFERRED_METRICS.includes(m)),
-  ];
+  METRIC_NAMES = DATA.metricNames;
 
   const sel = document.getElementById("metric-sel");
   sel.innerHTML = "";
@@ -598,15 +564,47 @@ function buildMetricSelect() {
     if (m === metric) opt.selected = true;
     sel.appendChild(opt);
   }
-  sel.onchange = () => { metric = sel.value; buildChart(); };
+  sel.onchange = () => loadMetric(sel.value);
 }
 
 // ── Init & loading ────────────────────────────────────────────────────────────
 
-function init(data) {
+// Load one metric's data from the server (cached after first fetch).
+// Updates the chart once the data arrives.
+function loadMetric(name) {
   const expNameEl = document.getElementById("exp-name");
-  DATA    = data;
-  colorBy = Object.keys(DATA.axes)[0];
+
+  // Already cached — switch instantly.
+  if (METRIC_CACHE[name]) {
+    metric = name;
+    buildChart();
+    return;
+  }
+
+  const expName = document.getElementById("experiment-sel").value;
+  expNameEl.classList.add("loading");
+  expNameEl.textContent = `Loading ${name}…`;
+
+  fetch(`/metric.json?name=${encodeURIComponent(expName)}&metric=${encodeURIComponent(name)}`)
+    .then(r => r.json())
+    .then(data => {
+      METRIC_CACHE[name] = data;
+      metric = name;
+      expNameEl.classList.remove("loading");
+      expNameEl.textContent = DATA.experiment;
+      buildChart();
+    })
+    .catch(e => {
+      expNameEl.classList.remove("loading");
+      expNameEl.textContent = DATA.experiment;
+      document.getElementById("status").textContent = "Error loading metric: " + e;
+    });
+}
+
+function init(data) {
+  DATA         = data;
+  METRIC_CACHE = {};   // clear cached metric data on experiment switch
+  colorBy      = Object.keys(DATA.axes)[0];
 
   // All values visible by default.
   filters = Object.fromEntries(
@@ -623,16 +621,15 @@ function init(data) {
     });
   }
 
-  expNameEl.textContent = "Building UI…";
+  // Pick initial metric BEFORE building the select so the dropdown reflects it.
+  metric = DATA.metricNames.includes(metric) ? metric
+    : (DATA.metricNames.find(m => m.includes("loss")) || DATA.metricNames[0]);
+
   buildMetricSelect();
   buildColorBySelect();
   buildFilters();
 
-  expNameEl.textContent = "Rendering chart…";
-  buildChart();
-
-  expNameEl.classList.remove("loading");
-  expNameEl.textContent = data.experiment;
+  loadMetric(metric);
 }
 
 function loadExperiment(name) {
@@ -676,42 +673,49 @@ fetch("/experiments")
 """
 
 
-# ── HTTP server ───────────────────────────────────────────────────────────────
+# ── HTTP server ────────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    _cache = {}          # experiment name -> json bytes
-    _default = None      # name of the pre-loaded experiment
+    _meta_cache   = {}  # experiment name -> json bytes (axes + combos + metric names)
+    _metric_cache = {}  # (experiment, metric_name) -> json bytes
+    _default      = None
+    aim_repo      = DEFAULT_AIM_REPO
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        qs     = urllib.parse.parse_qs(parsed.query)
 
         if parsed.path in ("/", "/index.html"):
-            body = HTML.encode()
-            self._send(200, "text/html; charset=utf-8", body)
+            self._send(200, "text/html; charset=utf-8", HTML.encode())
 
         elif parsed.path == "/experiments":
-            names = sorted(
-                (d.name for d in OUTPUTS_DIR.iterdir() if d.is_dir()),
-                key=lambda n: (OUTPUTS_DIR / n).stat().st_mtime,
-                reverse=True,
-            )
-            body = json.dumps({"experiments": names, "default": self._default}).encode()
+            names = list_experiments(self.aim_repo)
+            body  = json.dumps({"experiments": names, "default": self._default}).encode()
             self._send(200, "application/json", body)
 
         elif parsed.path == "/data.json":
-            qs = urllib.parse.parse_qs(parsed.query)
             name = qs.get("name", [None])[0]
             if not name:
                 self.send_response(400); self.end_headers(); return
-            if name not in Handler._cache:
-                sweep_dir = OUTPUTS_DIR / name
-                if not sweep_dir.is_dir():
-                    self.send_response(404); self.end_headers(); return
-                print(f"Loading: {name}", flush=True)
-                data = load_experiment(sweep_dir)
-                print(f"  {len(data['runs'])} runs, axes: {list(data['axes'].keys())}", flush=True)
-                Handler._cache[name] = json.dumps(data).encode()
-            self._send(200, "application/json", Handler._cache[name])
+            if name not in Handler._meta_cache:
+                print(f"Loading metadata: {name}", flush=True)
+                data = load_experiment_meta(name, self.aim_repo)
+                print(f"  {len(data['runs'])} runs, {len(data['axes'])} axes, "
+                      f"{len(data['metricNames'])} metrics", flush=True)
+                Handler._meta_cache[name] = json.dumps(data).encode()
+            self._send(200, "application/json", Handler._meta_cache[name])
+
+        elif parsed.path == "/metric.json":
+            name   = qs.get("name",   [None])[0]
+            metric = qs.get("metric", [None])[0]
+            if not name or not metric:
+                self.send_response(400); self.end_headers(); return
+            key = (name, metric)
+            if key not in Handler._metric_cache:
+                print(f"  Loading metric '{metric}' for {name}…", flush=True)
+                data = load_metric_data(name, metric, self.aim_repo)
+                Handler._metric_cache[key] = json.dumps(data).encode()
+            self._send(200, "application/json", Handler._metric_cache[key])
 
         else:
             self.send_response(404)
@@ -721,6 +725,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", len(body))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -731,18 +736,33 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("experiment", nargs="?", help="experiment name or directory (default: newest)")
+    parser.add_argument("experiment", nargs="?",
+                        help="Aim experiment name to pre-load (default: newest)")
+    parser.add_argument("--aim-repo", default=DEFAULT_AIM_REPO,
+                        help="Path to local .aim repo dir, or aim://host:port for remote "
+                             f"(default: script directory)")
     parser.add_argument("--port", type=int, default=43801)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
 
-    sweep_dir = find_sweep_dir(args.experiment)
-    print(f"Loading: {sweep_dir.name}")
-    data = load_experiment(sweep_dir)
-    print(f"  {len(data['runs'])} runs, axes: {list(data['axes'].keys())}")
+    Handler.aim_repo = args.aim_repo
 
-    Handler._cache[sweep_dir.name] = json.dumps(data).encode()
-    Handler._default = sweep_dir.name
+    # Find and pre-load the default experiment so the first page load is fast.
+    experiments = list_experiments(args.aim_repo)
+    if not experiments:
+        sys.exit(f"No experiments found in Aim repo: {args.aim_repo}")
+
+    default_exp = args.experiment or experiments[0]
+    if default_exp not in experiments:
+        sys.exit(f"Experiment not found: {default_exp}")
+
+    print(f"Loading metadata: {default_exp}")
+    data = load_experiment_meta(default_exp, args.aim_repo)
+    print(f"  {len(data['runs'])} runs, {len(data['axes'])} axes, "
+          f"{len(data['metricNames'])} metrics")
+
+    Handler._meta_cache[default_exp] = json.dumps(data).encode()
+    Handler._default = default_exp
 
     url = f"http://localhost:{args.port}"
     print(f"  Serving at {url}  (Ctrl+C to stop)")

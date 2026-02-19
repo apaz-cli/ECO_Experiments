@@ -5,6 +5,10 @@
 # The ECO approach for Muon is fixed to the winning approach from the
 # muon_approaches sweep.
 #
+# Learning rates (NanoGPT speedrun style):
+#   - Muon LR: 0.02 (for 2D weight matrices)
+#   - Adam LR: 3e-4 (for 1D params in Muon runs, and all params in Adam runs)
+#
 # Default model is 100M. Override for other sizes:
 #   python run_sweep.py --sweep muon_repro -- --model.flavor 430M
 
@@ -13,19 +17,22 @@ from _treatments import PAPER_TREATMENTS, _flags
 
 BASE_CONFIG = "configs/experiments/master.toml"
 
-# TODO: update to winning approach from muon_approaches sweep
 # lr, beta1, beta2, eps inherited from master.toml (shared with Adam fallback for 1D params).
 # momentum is Muon-only (default 0.95). weight_decay typically 0 for Muon.
 MUON_FLAGS = [
     "--optimizer.name", "ECOMuon",
-    "--optimizer.muon.lr", "3e-4",
+    "--optimizer.muon.lr", "0.02",      # NanoGPT style
     "--optimizer.muon.weight_decay", "0.1",
-    "--optimizer.adamw.lr", "3e-3",
+    "--optimizer.adamw.lr", "3e-4",     # Adam LR for 1D params
     "--eco.approach", "frobenius",
 ]
 
+ADAM_FLAGS = [
+    "--optimizer.adamw.lr", "3e-4",     # Same LR as Adam params in Muon runs
+]
+
 OPTIMIZERS = {
-    "adam": [],
+    "adam": ADAM_FLAGS,
     "muon": MUON_FLAGS,
 }
 

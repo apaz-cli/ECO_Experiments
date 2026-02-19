@@ -7,6 +7,10 @@
 #
 # Note: treatments with activation_quant=True set --eco.activation-dtype fp8
 # but baseline.toml has no model.converters, so activation quant is a no-op.
+#
+# Learning rates (NanoGPT speedrun style):
+#   - Muon LR: 0.02 (for 2D weight matrices)
+#   - Adam LR: 3e-4 (for 1D params in Muon runs, and all params in Adam runs)
 from _treatments import TREATMENTS, _flags
 
 BASE_CONFIG = "configs/debug/baseline.toml"
@@ -15,11 +19,15 @@ MUON_BASE_FLAGS = [
     "--optimizer.name", "ECOMuon",
     "--optimizer.muon.lr", "0.02",
     "--optimizer.muon.weight_decay", "0.1",
-    "--optimizer.adamw.lr", "3e-3",
+    "--optimizer.adamw.lr", "3e-4",  # Adam LR for 1D params (embeddings, biases, norms)
+]
+
+ADAM_BASE_FLAGS = [
+    "--optimizer.adamw.lr", "3e-4",  # Same LR as Adam params in Muon runs
 ]
 
 OPTIMIZERS = {
-    "adam": [],
+    "adam": ADAM_BASE_FLAGS,
     "muon": MUON_BASE_FLAGS,
 }
 

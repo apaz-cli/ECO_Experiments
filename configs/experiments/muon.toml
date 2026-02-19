@@ -3,10 +3,13 @@
 # Muon ECO experiments configuration.
 # Tests ECO approaches for the Muon optimizer (Newton-Schulz momentum).
 #
-# Based on ECO paper hyperparameters but adapted for Muon:
+# Learning rates (NanoGPT speedrun style):
+#   - Muon LR: 0.02 (for 2D weight matrices)
+#   - Adam LR: 3e-4 (for 1D params: embeddings, biases, norms)
+#   - Ratio ~67x because Muon's update RMS is ~1/sqrt(max_dim)
+#
+# Other hparams:
 #   - Muon optimizer with momentum=0.95, Newton-Schulz 5 iterations
-#   - Falls back to Adam for 1D params (biases, norms)
-#   - LR scaling: 3e-4 (typical Muon LR, ~4x lower than Adam)
 #   - Linear warmup (10% steps), cosine decay to 0.1x peak
 #   - T5 tokenizer (vocab=32100)
 #   - 50N tokens total, batch=256 seqs, seq_len=512 (half paper token budget)
@@ -40,7 +43,7 @@ momentum = 0.95
 weight_decay = 0.0  # Muon typically doesn't use weight decay
 
 [optimizer.adamw]
-lr = 3e-3  # For 1D params (biases, norms, embeddings)
+lr = 3e-4  # For 1D params (biases, norms, embeddings) - NanoGPT style
 beta1 = 0.9
 beta2 = 0.999
 eps = 1e-8
