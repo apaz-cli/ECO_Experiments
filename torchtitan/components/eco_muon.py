@@ -54,6 +54,10 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
     This is the core of Muon optimizer. NS5 uses 5 iterations of the
     Newton-Schulz algorithm to approximate U where G = U·P (polar decomposition).
 
+    Uses Chebyshev-optimized cubic iteration coefficients (3.4445, -4.7750, 2.0315)
+    from Keller Jordan's Muon implementation, which converge in ~5 steps.
+    The naive (1.5, -0.5) quadratic iteration requires ~100 steps to converge.
+
     Args:
         G: Input matrix (typically momentum)
         steps: Number of Newton-Schulz iterations (default: 5)
@@ -63,21 +67,28 @@ def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor
     """
     assert G.ndim == 2, "zeropower_via_newtonschulz5 requires 2D input"
 
-    # Normalize to prevent overflow
-    norm_G = G.norm(p='fro')
-    if norm_G < 1e-12:
+    norm_G = G.norm()
+    if norm_G < 1e-7:
         return torch.zeros_like(G)
 
+    # Chebyshev-optimized coefficients for fast convergence in 5 steps
+    a, b, c = (3.4445, -4.7750, 2.0315)
     X = G / norm_G
 
-    # Newton-Schulz iteration: X_{k+1} = X_k · (3I - X_k^T X_k) / 2
-    # The paper version uses: X_{k+1} = X_k · (aI + bX_k^T X_k + c(X_k^T X_k)^2)
-    # Using standard NS5 coefficients optimized for convergence
+    # Transpose tall matrices to work with A = X @ X.T (always square of smaller dim)
+    transposed = G.size(0) > G.size(1)
+    if transposed:
+        X = X.T
+
+    # Cubic NS iteration: X = a*X + (b*A + c*A^2) @ X where A = X @ X.T
+    # Fixed point: X @ X.T = I (orthonormal rows after transposing back)
     for _ in range(steps):
-        A = X.T @ X
-        # NS iteration: X = X @ (3I - A) / 2
-        # Equivalent form: X = 1.5*X - 0.5*X@A
-        X = 1.5 * X - 0.5 * X @ A
+        A = X @ X.T
+        B = b * A + c * (A @ A)
+        X = a * X + B @ X
+
+    if transposed:
+        X = X.T
 
     return X
 
@@ -135,6 +146,7 @@ class ECOMuon(Optimizer):
         jacobian_fd_eps: float = 1e-5,
         master_weights_dtype: torch.dtype | None = None,
         include_weight_decay_in_injection: bool = True,
+        exclude_from_muon: frozenset[int] = frozenset(),
     ):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -156,10 +168,14 @@ class ECOMuon(Optimizer):
                 f"Must be one of: naive_sgdm, frobenius, jacobian, pre_ns"
             )
 
-        # Split params into two groups: Muon (dim>=2) and AdamW (dim<2)
+        # Split params: Muon for 2D weight matrices (excluding embeddings/output),
+        # AdamW for everything else (1D params, embeddings, output projections).
+        # Keller Jordan's canonical Muon applies only to transformer block weights,
+        # not to embedding tables — those have very different quantization error
+        # characteristics (large init scale) and don't benefit from NS.
         params_list = list(params)
-        muon_params = [p for p in params_list if p.dim() >= 2]
-        adam_params = [p for p in params_list if p.dim() < 2]
+        muon_params = [p for p in params_list if p.dim() >= 2 and id(p) not in exclude_from_muon]
+        adam_params = [p for p in params_list if p.dim() < 2 or id(p) in exclude_from_muon]
 
         defaults = dict(
             lr=lr,

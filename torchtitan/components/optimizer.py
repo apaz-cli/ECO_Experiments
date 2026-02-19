@@ -371,6 +371,18 @@ def build_optimizers(
         optimizer_kwargs.pop("betas", None)  # Muon uses adam_betas instead
         optimizer_kwargs.pop("eps", None)    # Muon uses adam_eps instead
 
+        # Exclude embedding and output layers from Muon (they go to Adam instead).
+        # Muon (Newton-Schulz spectral normalization) is designed for transformer
+        # block weight matrices. Embeddings have large init scale (std=1 vs std=0.02),
+        # causing FP8 quantization errors ~100x larger than other layers — sending
+        # them through Muon causes momentum explosion with stochastic rounding.
+        exclude_muon_ids = set()
+        for model_part in model_parts:
+            for pname, p in model_part.named_parameters():
+                if not pname.startswith("layers."):
+                    exclude_muon_ids.add(id(p))
+        optimizer_kwargs["exclude_from_muon"] = frozenset(exclude_muon_ids)
+
         # Muon-specific hyperparameters from nested muon config
         muon_cfg = optimizer_config.muon
         optimizer_kwargs["lr"] = muon_cfg.lr

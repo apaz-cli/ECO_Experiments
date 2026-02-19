@@ -10,7 +10,7 @@ BASE_CONFIG = "configs/debug/baseline.toml"
 
 MUON_FLAGS = [
     "--optimizer.name", "ECOMuon",
-    "--optimizer.muon.lr", "3e-4",
+    "--optimizer.muon.lr", "0.02",
     "--optimizer.muon.weight_decay", "0.1",
     "--optimizer.adamw.lr", "3e-3",
     "--eco.approach", "frobenius",

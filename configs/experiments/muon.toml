@@ -35,7 +35,7 @@ hf_assets_path = "./assets/tokenizers/t5-base"
 name = "ECOMuon"
 
 [optimizer.muon]
-lr = 3e-4  # Muon typically uses lower LR than Adam
+lr = 0.02  # Standard Muon LR (Keller Jordan / modded-nanogpt)
 momentum = 0.95
 weight_decay = 0.0  # Muon typically doesn't use weight decay
 
