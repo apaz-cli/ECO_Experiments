@@ -591,21 +591,28 @@ for how NS transforms momentum.
 - Components of e aligned with dominant singular vectors will be suppressed regardless
 - The e_t ≈ e_{t+1} approximation adds further error
 
-#### Approach 4: Jacobian-Based (Exact)
+#### Approach 4: Jacobian-Based (Analytical)
 ```
-Solve: J_NS(m̃) · Δm ≈ e/η
-```
-
-Uses finite differences to approximate the Jacobian J_NS = ∂NS(m)/∂m:
-
-```
-J·v ≈ [NS(m + εv) - NS(m - εv)] / (2ε)
+Solve: J_NS(m̃) · Δm = e/η
 ```
 
-Then solves the linear system using conjugate gradient (initialized with the naive SGDM
-injection as a warm start). This is the **mathematically exact** approach, but
-expensive: each CG iteration requires two NS evaluations (10 Newton-Schulz iterations
-total). Serves as an upper bound on achievable performance.
+Uses the frozen right-factor approximation of the Fréchet derivative of the polar
+factor map P(M) = M(MᵀM)^{-1/2}:
+
+```
+J_NS[H] ≈ H · (m̃ᵀm̃)^{-1/2}
+```
+
+Inverting gives a closed-form correction:
+
+```
+Δm = (e/η) · (m̃ᵀm̃)^{1/2}
+```
+
+Computed via eigendecomposition of the Gram matrix m̃ᵀm̃ (cols×cols). No √(n/m)
+factor is needed since our NS returns the polar factor directly, without the
+RMS-to-RMS scaling convention used in the blog derivation. This is the approach
+from leloykun.github.io/ponder/eco/, which serves as the source of truth.
 
 ### 5.3 Experimental Setup
 
@@ -620,7 +627,7 @@ total). Serves as an upper bound on achievable performance.
 | Muon ECO (pre_ns) | Muon | Yes | Inject before NS |
 | Muon ECO (naive_sgdm) | Muon | Yes | Δm = (1/η)(1−1/β)·e |
 | Muon ECO (frobenius) | Muon | Yes | Δm = (‖m‖_F/η)(1−1/β)·e |
-| Muon ECO (jacobian) | Muon | Yes | Solve J·Δm = e/η via CG |
+| Muon ECO (jacobian) | Muon | Yes | Δm = (e/η)·(m̃ᵀm̃)^{1/2} |
 | Adam baseline (w/ MW) | Adam | No | — |
 | Adam ECO | Adam | Yes | Paper formula (Alg. 3) |
 
@@ -628,7 +635,7 @@ total). Serves as an upper bound on achievable performance.
 - **naive vs no-ECO**: Does any error compensation help?
 - **pre_ns vs naive_sgdm**: Does injecting before NS help?
 - **naive_sgdm vs frobenius**: Does the ‖m‖_F scaling matter?
-- **frobenius vs jacobian**: How much better can exact Jacobian do?
+- **frobenius vs jacobian**: Does the full (m̃ᵀm̃)^{1/2} correction beat the scalar ‖m‖_F approximation?
 - **Best Muon+ECO vs Adam+ECO**: Cross-optimizer comparison
 
 ### 5.4 Implementation (**DONE**)
@@ -659,7 +666,7 @@ total). Serves as an upper bound on achievable performance.
   master-weight removal causes? (Compare "naive no-ECO" vs all ECO approaches.)
 - **Approach comparison:**
   - Does `frobenius` beat `naive_sgdm`? (Does ‖m‖_F scaling matter?)
-  - Does `jacobian` beat `frobenius`? (Is exact Jacobian worth the cost?)
+  - Does `jacobian` beat `frobenius`? (Does the directional (m̃ᵀm̃)^{1/2} correction matter vs scalar ‖m‖_F?)
   - Does `pre_ns` beat `frobenius`? (Pre-NS vs post-NS philosophy?)
 - **Heuristic validation:** Same metrics as ECOAdamW:
   - `eco/heuristic/norm_ratio` — ‖e_{t+1}‖ / ‖e_t‖
