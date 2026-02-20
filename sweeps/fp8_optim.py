@@ -28,7 +28,7 @@ SELECTED = {
 
 OPTIONS = {
     **SPEED_OPTIONS,
-    "treatment": {
+    ".treatment": {
         "values": list(SELECTED.keys()),
         "flags": {name: _flags(*args) for name, args in SELECTED.items()},
         "name": "tmt",

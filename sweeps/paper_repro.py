@@ -31,7 +31,7 @@ BASE_CONFIG = "configs/experiments/master.toml"
 
 OPTIONS = {
     **SPEED_OPTIONS,
-    "treatment": {
+    ".treatment": {
         "values": list(PAPER_TREATMENTS.keys()),
         "flags": {
             name: _flags(*args) for name, args in PAPER_TREATMENTS.items()

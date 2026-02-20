@@ -1,42 +1,5 @@
 #!/usr/bin/env python3
-"""
-Run experiment sweeps.
-
-Discovers sweep definitions from .py files in sweeps/, generates all
-combinations, and executes each via run_config.sh with CLI overrides.
-
-USAGE:
-    python run_sweep.py --sweep <name> [options] [-- extra_overrides...]
-    ./sweeps/<name>.py [options] [-- extra_overrides...]
-
-OPTIONS:
-    --sweep <name>          Sweep name (from sweeps/<name>.py)
-    --base_config <path>    Base TOML config (overrides sweep's BASE_CONFIG)
-    --output_dir <dir>      Output directory (default: outputs/sweeps)
-    --experiment <name>     Aim experiment name (default: <sweep>_<timestamp>)
-    -g [N], --gpus [N]      Number of GPUs (0 = all visible, default = 1)
-    -j N, --jobs-per-gpu N  Concurrent jobs per GPU (default: 1)
-    --workers <targets>     SSH targets for remote dispatch (comma-sep or @file)
-    --remote-dir <path>     Repo path on workers (default: same as local)
-    --aim-server <h:p>      Aim tracking server host:port (auto-detected)
-    --sync-artifacts        Rsync dump_folder back after each remote job
-    --dry-run               Print commands without execution
-    --                      Pass extra arguments to every training run
-
-SWEEP FILE FORMAT:
-    BASE_CONFIG = "path/to/base.toml"
-    EXTRA_FLAGS = ["--flag", "value", ...]  # optional, prepended to every run
-    OPTIONS = {
-        "key": {
-            "values": [list],
-            "flags": {value: [cli_flags], ...} or "--flag-name" (string shorthand),
-            "name": "short_name" or None,
-            "monotonic": "increasing"|"decreasing"|None,
-            "singular": bool,
-        }, ...
-    }
-    def EXCLUDE(combo: dict) -> bool: ...  # optional
-"""
+"""Run experiment sweeps. See docs/sweep_configuration.md for format and usage."""
 
 import argparse
 import importlib.util
@@ -50,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from pathlib import Path
@@ -66,7 +30,21 @@ _BLUE = "\033[34m"
 _RESET = "\033[0m"
 _DIM_COLORS = [_CYAN, _YELLOW, _MAGENTA, _BLUE]
 
+# Metadata keys in a dimension spec (no dot prefix). Dot-prefixed keys are subdimensions.
+_METADATA_KEYS = {"values", "flags", "name", "singular", "monotonic"}
+
 _log_file = None
+
+
+def _parse_flag_list(f, ctx):
+    """Normalize a flags field to a list of CLI strings (branch/fixed dims only)."""
+    if f is None:
+        return []
+    if isinstance(f, str):
+        return [f]
+    if isinstance(f, list):
+        return f
+    raise ValueError(f"{ctx}: flags must be str or list, got {type(f).__name__}")
 
 
 def sweep_print(msg, end="\n"):
@@ -100,106 +78,285 @@ def _load_module(path):
     return mod
 
 
+def load_sweep_file(path):
+    """Load a single sweep .py file, returning a sweep-info dict."""
+    mod = _load_module(path)
+    return {
+        "name": Path(path).stem,
+        "options": mod.OPTIONS,
+        "base_config": getattr(mod, "BASE_CONFIG", None),
+        "exclude": getattr(mod, "EXCLUDE", None),
+        "extra_flags": getattr(mod, "EXTRA_FLAGS", []),
+    }
+
+
 def load_sweeps():
     """Import all sweep files from sweeps/ directory."""
-    sweeps = {}
-    for f in sorted((Path(REPO_ROOT) / "sweeps").glob("[!_]*.py")):
-        mod = _load_module(f)
-        sweeps[f.stem] = {
-            "options": mod.OPTIONS,
-            "base_config": getattr(mod, "BASE_CONFIG", None),
-            "exclude": getattr(mod, "EXCLUDE", None),
-            "extra_flags": getattr(mod, "EXTRA_FLAGS", []),
-        }
-    return sweeps
+    return {
+        f.stem: load_sweep_file(f)
+        for f in sorted((Path(REPO_ROOT) / "sweeps").glob("[!_]*.py"))
+    }
 
 
-def load_sweep_file(path):
-    """Load a single sweep .py file."""
-    mod = _load_module(path)
-    return (Path(path).stem, mod.OPTIONS, getattr(mod, "BASE_CONFIG", None),
-            getattr(mod, "EXCLUDE", None), getattr(mod, "EXTRA_FLAGS", []))
+def validate_options(options, _ancestor_keys=None):
+    """Validate and normalize OPTIONS dict.
 
+    Each key in options must start with '.' to identify it as a dimension.
+    Within a dim spec, dot-prefixed keys are subdimensions; non-dot keys are metadata.
 
-def validate_options(options):
-    """Validate and normalize OPTIONS dict (expand string flags shorthand)."""
+    Three dimension types (determined by content):
+      Value dim   — has 'values'; sweeps over that list with per-value flags.
+      Branch dim  — no 'values', has dot-prefixed subdim keys; each subdim is a
+                    mutually-exclusive branch (the dim's implicit "values").
+      Fixed dim   — no 'values', no subdims; flags are always appended (one combo).
+
+    Synthesizes _values, _flags, _sub_opts_map on each dim spec for use by
+    _expand_tree and related functions.
+    """
+    if _ancestor_keys is None:
+        _ancestor_keys = frozenset()
+    current_keys = frozenset(options.keys())
+
     for key, opt in options.items():
-        for field in ("values", "flags", "name"):
-            if field not in opt:
-                raise ValueError(f"Option '{key}' missing '{field}'")
-        if isinstance(opt["flags"], str):
-            flag = opt["flags"]
-            opt["flags"] = {v: [flag, str(v)] for v in opt["values"]}
-        for v in opt["values"]:
-            if v not in opt["flags"]:
-                raise ValueError(f"Option '{key}' missing flags for value {v!r}")
+        if not key.startswith("."):
+            raise ValueError(
+                f"Dimension key {key!r} must start with '.' to mark it as a dimension "
+                f"(metadata keys inside a dim spec have no dot)"
+            )
+        subdim_keys = [k for k in opt if k.startswith(".")]
+        for mk in opt:
+            if not mk.startswith(".") and not mk.startswith("_") and mk not in _METADATA_KEYS:
+                raise ValueError(f"Unknown metadata key {mk!r} in dimension {key!r}")
+
         m = opt.get("monotonic")
         if m is not None and m not in ("increasing", "decreasing"):
-            raise ValueError(f"Option '{key}' monotonic must be 'increasing'|'decreasing'|None")
+            raise ValueError(f"Dimension {key!r} monotonic must be 'increasing'|'decreasing'|None")
+
+        has_values = "values" in opt
+        has_subdims = bool(subdim_keys)
+
+        if has_values and has_subdims:
+            raise ValueError(
+                f"Dimension {key!r} has both 'values' and subdimensions {subdim_keys!r}. "
+                f"Use 'values' for a value dim or dot-prefixed subdim keys for a branch dim, not both."
+            )
+
+        if has_values:
+            # VALUE DIM — explicit list of values
+            values = opt["values"]
+            flags = opt.get("flags")
+            if flags is None:
+                flags_dict = {v: [] for v in values}
+            elif isinstance(flags, str):
+                flags_dict = {v: [flags, str(v)] for v in values}
+            elif isinstance(flags, dict):
+                flags_dict = dict(flags)
+            else:
+                raise ValueError(f"Dimension {key!r} flags must be str or dict, got {type(flags).__name__}")
+            for v in values:
+                if v not in flags_dict:
+                    raise ValueError(f"Dimension {key!r} missing flags for value {v!r}")
+            opt["_values"] = list(values)
+            opt["_flags"] = flags_dict
+            opt["_sub_opts_map"] = {}
+
+        elif has_subdims:
+            # BRANCH DIM — subdim keys are the mutually-exclusive branches
+            branch_values, flags_dict, sub_opts_map = [], {}, {}
+            for sdkey in subdim_keys:
+                sdspec = opt[sdkey]
+                val = sdkey[1:]  # branch value name = subdim key without leading dot
+                branch_values.append(val)
+                flags_dict[val] = _parse_flag_list(sdspec.get("flags"), f"Branch {sdkey!r} in {key!r}")
+                branch_subdims = {k: v for k, v in sdspec.items() if k.startswith(".")}
+                if branch_subdims:
+                    sub_opts_map[val] = branch_subdims
+                    for bk in branch_subdims:
+                        if bk in _ancestor_keys or bk in current_keys:
+                            raise ValueError(
+                                f"Subdim key {bk!r} (under branch {sdkey!r} of {key!r}) "
+                                f"collides with ancestor or sibling dim"
+                            )
+                    validate_options(branch_subdims, _ancestor_keys | current_keys)
+            opt["_values"] = branch_values
+            opt["_flags"] = flags_dict
+            opt["_sub_opts_map"] = sub_opts_map
+
+        else:
+            # FIXED DIM — no values, no subdims; flags always appended
+            f_list = _parse_flag_list(opt.get("flags"), f"Fixed dim {key!r}")
+            opt["_values"] = [None]
+            opt["_flags"] = {None: f_list}
+            opt["_sub_opts_map"] = {}
 
 
 # ── Variation generation ───────────────────────────────────────────────────
 
 
-def generate_variations(sweep_name, options, exclude_fn=None, extra_flags=()):
-    """Generate all config variations.
+def _make_part(nm, val):
+    """Build a name part string from dim name and value, or None if no name/value."""
+    if nm is None or val is None:
+        return None
+    if isinstance(val, bool):
+        return f"{nm}{'T' if val else 'F'}"
+    return f"{nm}{val}"
 
-    Singular dims vary slowest (diagonal order — advances all singular dims
-    at roughly the same rate).  Non-singular dims vary fastest (lex order —
-    interleaves treatments for better parallel probing).
+
+def _flatten_tokens(tokens):
+    """Flatten a name_tokens list to a plain list of strings."""
+    parts = []
+    for tok in tokens:
+        if isinstance(tok, list):
+            parts.extend(tok)
+        else:
+            parts.append(tok)
+    return parts
+
+
+def _build_level_tokens(all_keys, vals, options, contributing_keys=(), child_tokens=()):
+    """Build name tokens for one level of the expansion tree.
+
+    contributing_keys: keys whose selected branch has child sub-dims (child_tokens
+                       are attributed to them, dotted onto this level's name part).
+    child_tokens:      name tokens from the recursive child expansion.
+    """
+    tokens = []
+    for key, val in zip(all_keys, vals):
+        nm = options[key].get("name", key[1:])
+        part = _make_part(nm, val)
+        if key in contributing_keys:
+            if part is not None:
+                tokens.append([part] + _flatten_tokens(child_tokens))
+            else:
+                # No name for this dim: pass child tokens through flat
+                tokens.extend(child_tokens)
+        elif part is not None:
+            tokens.append(part)
+    return tokens
+
+
+def _expand_tree(options, combo_so_far, effective_so_far):
+    """Recursively expand an options tree, yielding (combo, effective_options, name_tokens).
+
+    options: dict with dot-prefixed dimension keys (e.g. {".treatment": {...}}).
+    combo keys and effective_options keys use dim names WITHOUT the leading dot.
+
+    name_tokens is a list of:
+      - str       — a simple name part (from a non-branching dim)
+      - list[str] — a dot group: [parent_part, *child_parts], joined with '.'
+
+    Non-singular (lex) dims vary fastest in sorted order.
+    Singular (diag) dims vary slowest in diagonal order.
+    Branch dims expand their selected branch's sub-dims as additional dims.
     """
     lex_keys = sorted(k for k in options if not options[k].get("singular"))
     diag_keys = sorted(k for k in options if options[k].get("singular"))
     all_keys = lex_keys + diag_keys
 
-    lex_combos = (list(itertools.product(*(options[k]["values"] for k in lex_keys)))
+    if not all_keys:
+        yield combo_so_far, effective_so_far, []
+        return
+
+    lex_combos = (list(itertools.product(*(options[k]["_values"] for k in lex_keys)))
                   if lex_keys else [()])
 
     if diag_keys:
-        raw = list(itertools.product(*(range(len(options[k]["values"])) for k in diag_keys)))
+        raw = list(itertools.product(*(range(len(options[k]["_values"])) for k in diag_keys)))
         raw.sort(key=lambda idx: (sum(idx), idx))
         diag_combos = [
-            tuple(options[diag_keys[i]]["values"][j] for i, j in enumerate(idx))
+            tuple(options[diag_keys[i]]["_values"][j] for i, j in enumerate(idx))
             for idx in raw
         ]
     else:
         diag_combos = [()]
 
-    variations = []
     for dv in diag_combos:
         for lv in lex_combos:
-            combo = dict(zip(all_keys, lv + dv))
-            if exclude_fn and exclude_fn(combo):
-                continue
-            parts, overrides = [], list(extra_flags)
-            for key in all_keys:
-                val = combo[key]
-                overrides.extend(options[key]["flags"].get(val, []))
-                nm = options[key].get("name")
-                if nm is not None:
-                    if isinstance(val, bool):
-                        parts.append(f"{nm}{'T' if val else 'F'}")
-                    else:
-                        parts.append(f"{nm}{val}")
-            variations.append({
-                "name": f"{sweep_name}_{'_'.join(parts) if parts else 'default'}",
-                "overrides": overrides,
-                "combo": combo,
-            })
+            vals = lv + dv
+            # Combo and effective keys strip the leading dot from dim keys
+            combo = {**combo_so_far, **{k[1:]: v for k, v in zip(all_keys, vals)}}
+            effective = {**effective_so_far, **{k[1:]: v for k, v in options.items()}}
+
+            # Collect sub-options from dims whose selected value has branch sub-dims
+            sub_opts = {}
+            contributing_keys = set()
+            for key, val in zip(all_keys, vals):
+                opt = options[key]
+                children = opt["_sub_opts_map"].get(val, {})
+                if children:
+                    sub_opts.update(children)
+                    contributing_keys.add(key)
+
+            if sub_opts:
+                for child_combo, child_effective, child_tokens in _expand_tree(
+                    sub_opts, combo, effective
+                ):
+                    yield child_combo, child_effective, _build_level_tokens(
+                        all_keys, vals, options, contributing_keys, child_tokens)
+            else:
+                yield combo, effective, _build_level_tokens(all_keys, vals, options)
+
+
+def generate_variations(sweep_name, options, exclude_fn=None, extra_flags=()):
+    """Generate all config variations using tree expansion.
+
+    Singular dims vary slowest (diagonal order — advances all singular dims
+    at roughly the same rate).  Non-singular dims vary fastest (lex order —
+    interleaves treatments for better parallel probing).
+
+    Branch dims expand their selected branch's sub-dims as additional dims.
+    Run names use '.' to signal branch ancestry and '_' to separate peer dims.
+    """
+    variations = []
+    for combo, effective, name_tokens in _expand_tree(options, {}, {}):
+        if exclude_fn and exclude_fn(combo):
+            continue
+        # Flatten name tokens: dot groups → "parent.child", peers → "_"-joined
+        segments = []
+        for tok in name_tokens:
+            if isinstance(tok, list):
+                segments.append(".".join(tok))
+            else:
+                segments.append(tok)
+        name = f"{sweep_name}_{'_'.join(segments) if segments else 'default'}"
+        # Build CLI overrides from all dims in this combo
+        overrides = list(extra_flags)
+        for key, val in combo.items():
+            if key in effective:
+                overrides.extend(effective[key]["_flags"].get(val, []))
+        variations.append({
+            "name": name,
+            "overrides": overrides,
+            "combo": combo,
+            "effective_options": effective,
+        })
     return variations
 
 
 def _treatment_key(combo, options):
-    """Non-singular dims identify a treatment."""
-    return tuple(combo[k] for k in sorted(options) if not options[k].get("singular"))
+    """Non-singular dims identify a treatment. Options keys have dot prefix; combo keys don't."""
+    return tuple(combo[k[1:]] for k in sorted(options) if not options[k].get("singular"))
 
 
 def count_expected(options):
-    """Expected runs (singular dims contribute 1 each)."""
+    """Expected runs, computed recursively over the options tree.
+
+    Singular dims contribute 1 (we only need one working value).
+    Non-singular dims with no sub-options multiply by their value count.
+    Non-singular dims with sub-options: non-branching values count as 1,
+    branching values multiply by their subtree count.
+    """
     n = 1
-    for opt in options.values():
-        if not opt.get("singular"):
-            n *= len(opt["values"])
+    for key, opt in options.items():
+        if opt.get("singular"):
+            continue
+        n_vals = len(opt["_values"])
+        sub_opts_map = opt["_sub_opts_map"]
+        if not sub_opts_map:
+            n *= n_vals
+        else:
+            branch_sum = sum(count_expected(sub) for sub in sub_opts_map.values())
+            n *= (n_vals - len(sub_opts_map)) + branch_sum
     return n
 
 
@@ -207,19 +364,23 @@ def count_expected(options):
 
 
 def should_skip(combo, failed, succeeded, options):
-    """Check monotonic (skip worse on failure) and singular (skip others on success)."""
+    """Check monotonic (skip worse on failure) and singular (skip others on success).
+
+    options keys have dot prefix; combo keys are stripped (no dot).
+    """
     # Monotonic: skip values worse than a known failure (all other dims must match)
     for fc in failed:
         for key, opt in options.items():
             m = opt.get("monotonic")
             if not m:
                 continue
-            if not all(fc.get(k) == combo.get(k) for k in options if k != key):
+            dim = key[1:]  # combo key (no dot)
+            if not all(fc.get(k[1:]) == combo.get(k[1:]) for k in options if k != key):
                 continue
-            vals = opt["values"]
+            vals = opt["_values"]
             try:
-                fi, ci = vals.index(fc[key]), vals.index(combo[key])
-            except (ValueError, TypeError):
+                fi, ci = vals.index(fc[dim]), vals.index(combo[dim])
+            except (ValueError, TypeError, KeyError):
                 continue
             if (m == "increasing" and fi <= ci) or (m == "decreasing" and fi >= ci):
                 return True
@@ -230,10 +391,11 @@ def should_skip(combo, failed, succeeded, options):
         for key, opt in options.items():
             if not opt.get("singular"):
                 continue
-            if not all(sc.get(k) == combo.get(k)
+            dim = key[1:]
+            if not all(sc.get(k[1:]) == combo.get(k[1:])
                        for k in options if k != key and not options[k].get("singular")):
                 continue
-            if sc[key] != combo[key]:
+            if sc.get(dim) != combo.get(dim):
                 return True
 
     return False
@@ -266,7 +428,7 @@ def _visible_devices():
         return devs
     try:
         r = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, check=True)
         return [int(x) for x in r.stdout.strip().splitlines() if x.strip()]
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         return [0]
@@ -327,8 +489,7 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
     run_dir = os.path.join(output_dir, experiment, name)
     os.makedirs(run_dir, exist_ok=True)
 
-    tags = [f"{k}={v}" for k, v in var["combo"].items()]
-    tag_str = ",".join(str(t) for t in tags)
+    tag_str = ",".join(f"{k}={v}" for k, v in var["combo"].items())
 
     t0 = time.time()
     try:
@@ -400,10 +561,13 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
 
 
 def _singular_desc(combo, options):
-    """Short description of singular dim values, e.g. 'bs=64, ac=full'."""
+    """Short description of singular dim values, e.g. 'bs=64, ac=full'.
+
+    options keys have dot prefix; combo keys are stripped (no dot).
+    """
     abbrev = {"local_batch_size": "bs", "ac_mode": "ac", "compile": "comp"}
     return ", ".join(
-        f"{abbrev.get(k, k[:4])}={combo[k]}"
+        f"{abbrev.get(k[1:], k[1:5])}={combo[k[1:]]}"
         for k in sorted(options) if options[k].get("singular")
     )
 
@@ -411,17 +575,21 @@ def _singular_desc(combo, options):
 # ── Sweep execution ────────────────────────────────────────────────────────
 
 
-def run_sweep(variations, base_config, output_dir, experiment, options, extra,
+def run_sweep(variations, base_config, output_dir, experiment, expected, extra,
               gpu_slots, jobs_per_gpu, remote_dir=None, aim_server=None,
               sync_artifacts=False):
     """Execute all variations. Single code path for sequential and parallel.
 
     gpu_slots: list of (worker, gpu_id) tuples.
                worker=None means local execution.
+    expected:  expected number of resolved treatments (from count_expected).
     """
     num_slots = len(gpu_slots) * jobs_per_gpu
-    has_singular = any(o.get("singular") for o in options.values())
-    expected = count_expected(options)
+    has_singular = any(
+        o.get("singular")
+        for var in variations
+        for o in var["effective_options"].values()
+    )
 
     # Shared state (protected by lock)
     results = []          # (var, success, elapsed, log_file)
@@ -442,16 +610,17 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 
     def _job_worker(var):
         worker, gpu = gpu_q.get()
+        opts = var["effective_options"]
 
         # Pre-flight: re-check skip in case treatment was resolved while queued
         with lock:
-            if should_skip(var["combo"], failed, succeeded, options):
+            if should_skip(var["combo"], failed, succeeded, opts):
                 gpu_q.put((worker, gpu))
                 skipped_count[0] += 1
                 return
 
         nm = var["name"].ljust(pad)
-        sdesc = _singular_desc(var["combo"], options) if has_singular else ""
+        sdesc = _singular_desc(var["combo"], opts) if has_singular else ""
         # Compute log path here so we can print it at START
         run_dir = os.path.join(output_dir, experiment, var["name"])
         log = os.path.join(run_dir, "training.log")
@@ -482,7 +651,7 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 
         with lock:
             results.append((var, ok, elapsed, log))
-            tk = _treatment_key(var["combo"], options)
+            tk = _treatment_key(var["combo"], opts)
             (succeeded if ok else failed).append(var["combo"])
             if ok:
                 resolved.add(tk)
@@ -497,7 +666,7 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
             if worker:
                 loc = f"{_MAGENTA}{worker}{_RESET} gpu {gpu}"
             else:
-                loc = f""
+                loc = ""
             sweep_print(f"  {tag}  {_GREEN}{nm}{_RESET} {elapsed:.1f}s [{nr}/{expected} resolved] {loc} {_BLUE}{log}{_RESET}")
 
         return
@@ -519,7 +688,7 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
                 _drain_completed()
 
                 # Defer if previous run of same treatment is still in-flight
-                tk = _treatment_key(var["combo"], options)
+                tk = _treatment_key(var["combo"], var["effective_options"])
                 prev = inflight.get(tk)
                 if prev is not None and not prev.done():
                     deferred.append(var)
@@ -534,7 +703,8 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 
                 # Check skip with most up-to-date state
                 with lock:
-                    skip = should_skip(var["combo"], failed, succeeded, options)
+                    skip = should_skip(var["combo"], failed, succeeded,
+                                       var["effective_options"])
                 if skip:
                     skipped_count[0] += 1
                     continue
@@ -560,14 +730,18 @@ def run_sweep(variations, base_config, output_dir, experiment, options, extra,
 # ── Summary ────────────────────────────────────────────────────────────────
 
 
-def print_summary(results, skipped, elapsed, options):
+def print_summary(results, skipped, elapsed):
     """Print per-treatment summary."""
-    has_singular = any(o.get("singular") for o in options.values())
+    has_singular = any(
+        o.get("singular")
+        for var, _, _, _ in results
+        for o in var["effective_options"].values()
+    )
 
     # Group by treatment
     treatments = {}
     for var, ok, el, log in results:
-        tk = _treatment_key(var["combo"], options)
+        tk = _treatment_key(var["combo"], var["effective_options"])
         treatments.setdefault(tk, []).append((var, ok, el, log))
 
     ok_count = sum(1 for runs in treatments.values() if any(s for _, s, _, _ in runs))
@@ -594,7 +768,7 @@ def print_summary(results, skipped, elapsed, options):
         successes = [(v, e, lf) for v, s, e, lf in runs if s]
         if successes:
             best_var, best_el, best_log = min(successes, key=lambda x: x[1])
-            sdesc = _singular_desc(best_var["combo"], options) if has_singular else ""
+            sdesc = _singular_desc(best_var["combo"], best_var["effective_options"]) if has_singular else ""
             n_probes = sum(1 for _, s, _, _ in runs if not s)
             pnote = f", {n_probes} probes" if n_probes else ""
             sweep_print(f"  {_GREEN}   OK{_RESET}  {best_var['name']:<40}"
@@ -620,7 +794,10 @@ def main():
     sweep_name = options = default_base = exclude_fn = sweeps = None
     extra_flags = []
     if argv and argv[0].endswith(".py") and os.path.isfile(argv[0]):
-        sweep_name, options, default_base, exclude_fn, extra_flags = load_sweep_file(argv[0])
+        info = load_sweep_file(argv[0])
+        sweep_name, options, default_base, exclude_fn, extra_flags = (
+            info["name"], info["options"], info["base_config"],
+            info["exclude"], info["extra_flags"])
         validate_options(options)
         argv = argv[1:]
 
@@ -686,7 +863,6 @@ def main():
         if aim_server is None:
             aim_server = _get_default_aim_server()
         # Respect --gpus as a per-worker limit
-        from collections import Counter
         if args.gpus is not None and args.gpus > 0:
             limited = []
             seen = Counter()
@@ -753,8 +929,8 @@ def main():
     # List all variations with colored flags
     for var in variations:
         colored = []
-        for ci, key in enumerate(var["combo"]):
-            flags = options[key]["flags"].get(var["combo"][key], [])
+        for ci, (key, val) in enumerate(var["combo"].items()):
+            flags = var["effective_options"].get(key, {}).get("_flags", {}).get(val, [])
             if flags:
                 color = _DIM_COLORS[ci % len(_DIM_COLORS)]
                 colored.append(f"{color}{' '.join(flags)}{_RESET}")
@@ -776,11 +952,11 @@ def main():
     sweep_print(f"{'=' * 80}\n")
 
     results, skipped, elapsed = run_sweep(
-        variations, base_config, output_dir, experiment, options, extra,
+        variations, base_config, output_dir, experiment, expected, extra,
         gpu_slots, args.jobs_per_gpu, remote_dir=remote_dir,
         aim_server=aim_server, sync_artifacts=args.sync_artifacts)
 
-    has_failures = print_summary(results, skipped, elapsed, options)
+    has_failures = print_summary(results, skipped, elapsed)
     sweep_print(f"\nOutput: {output_dir}")
     if _log_file:
         _log_file.close()

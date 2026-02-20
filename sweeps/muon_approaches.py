@@ -18,7 +18,7 @@ EXTRA_FLAGS = _flags(*TREATMENTS["fp8_eco_sr"])
 APPROACHES = ["pre_ns", "naive_sgdm", "frobenius", "jacobian"]
 OPTIONS = {
     **SPEED_OPTIONS,
-    "eco_approach": {
+    ".eco_approach": {
         "values": APPROACHES,
         "flags": "--eco.approach",
         "name": "a",

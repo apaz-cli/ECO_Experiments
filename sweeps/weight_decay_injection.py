@@ -28,12 +28,12 @@ def EXCLUDE(combo):
     return combo["weight_decay"] == 0.0 and combo["include_weight_decay_in_injection"] is True
 
 OPTIONS = {
-    "approach": {
+    ".approach": {
         "values": ["jacobian"],
         "flags": {"jacobian": ["--eco.approach", "jacobian"]},
         "name": "app",
     },
-    "weight_decay": {
+    ".weight_decay": {
         "values": [0.0, 0.1],
         "flags": {
             0.0: ["--optimizer.muon.weight_decay", "0.0"],
@@ -41,7 +41,7 @@ OPTIONS = {
         },
         "name": "wd",
     },
-    "include_weight_decay_in_injection": {
+    ".include_weight_decay_in_injection": {
         "values": [False, True],
         "flags": {
             False: ["--eco.no-include_weight_decay_in_injection"],

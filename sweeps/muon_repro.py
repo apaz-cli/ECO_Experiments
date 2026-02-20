@@ -38,12 +38,12 @@ OPTIMIZERS = {
 
 OPTIONS = {
     **SPEED_OPTIONS,
-    "optimizer": {
+    ".optimizer": {
         "values": list(OPTIMIZERS.keys()),
         "flags": OPTIMIZERS,
         "name": "opt",
     },
-    "treatment": {
+    ".treatment": {
         "values": list(PAPER_TREATMENTS.keys()),
         "flags": {
             name: _flags(*args) for name, args in PAPER_TREATMENTS.items()

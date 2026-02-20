@@ -13,12 +13,12 @@ SELECTED = {
 }
 
 OPTIONS = {
-    "treatment": {
+    ".treatment": {
         "values": list(SELECTED.keys()),
         "flags": {name: _flags(*args) for name, args in SELECTED.items()},
         "name": "tmt",
     },
-    "beta1": {
+    ".beta1": {
         "values": [0.8, 0.85, 0.9, 0.95, 0.99],
         "flags": "--optimizer.adamw.beta1",
         "name": "b1",
