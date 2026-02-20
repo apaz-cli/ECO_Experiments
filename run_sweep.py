@@ -334,8 +334,8 @@ def generate_variations(sweep_name, options, exclude_fn=None, extra_flags=()):
 
 
 def _treatment_key(combo, options):
-    """Non-singular dims identify a treatment. Options keys have dot prefix; combo keys don't."""
-    return tuple(combo[k[1:]] for k in sorted(options) if not options[k].get("singular"))
+    """Non-singular dims identify a treatment. Both combo and options use stripped keys (no dot)."""
+    return tuple(combo[k] for k in sorted(options) if not options[k].get("singular"))
 
 
 def count_expected(options):
@@ -366,7 +366,7 @@ def count_expected(options):
 def should_skip(combo, failed, succeeded, options):
     """Check monotonic (skip worse on failure) and singular (skip others on success).
 
-    options keys have dot prefix; combo keys are stripped (no dot).
+    Both combo and options use stripped keys (no dot prefix).
     """
     # Monotonic: skip values worse than a known failure (all other dims must match)
     for fc in failed:
@@ -374,12 +374,11 @@ def should_skip(combo, failed, succeeded, options):
             m = opt.get("monotonic")
             if not m:
                 continue
-            dim = key[1:]  # combo key (no dot)
-            if not all(fc.get(k[1:]) == combo.get(k[1:]) for k in options if k != key):
+            if not all(fc.get(k) == combo.get(k) for k in options if k != key):
                 continue
             vals = opt["_values"]
             try:
-                fi, ci = vals.index(fc[dim]), vals.index(combo[dim])
+                fi, ci = vals.index(fc[key]), vals.index(combo[key])
             except (ValueError, TypeError, KeyError):
                 continue
             if (m == "increasing" and fi <= ci) or (m == "decreasing" and fi >= ci):
@@ -391,11 +390,10 @@ def should_skip(combo, failed, succeeded, options):
         for key, opt in options.items():
             if not opt.get("singular"):
                 continue
-            dim = key[1:]
-            if not all(sc.get(k[1:]) == combo.get(k[1:])
+            if not all(sc.get(k) == combo.get(k)
                        for k in options if k != key and not options[k].get("singular")):
                 continue
-            if sc.get(dim) != combo.get(dim):
+            if sc.get(key) != combo.get(key):
                 return True
 
     return False
@@ -563,11 +561,11 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
 def _singular_desc(combo, options):
     """Short description of singular dim values, e.g. 'bs=64, ac=full'.
 
-    options keys have dot prefix; combo keys are stripped (no dot).
+    Both combo and options use stripped keys (no dot prefix).
     """
     abbrev = {"local_batch_size": "bs", "ac_mode": "ac", "compile": "comp"}
     return ", ".join(
-        f"{abbrev.get(k[1:], k[1:5])}={combo[k[1:]]}"
+        f"{abbrev.get(k, k[:4])}={combo[k]}"
         for k in sorted(options) if options[k].get("singular")
     )
 
