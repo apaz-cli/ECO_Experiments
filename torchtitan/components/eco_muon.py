@@ -21,8 +21,9 @@ ECO approaches for Muon:
     2. "frobenius": Scale by Frobenius norm (Adam analogy)
        Δm = (‖m‖_F/η)(1 - 1/β) · e
 
-    3. "jacobian": Exact Jacobian-based injection using finite differences
-       Solve: η·J·Δm ≈ e where J = ∂NS(m)/∂m
+    3. "jacobian": Analytical frozen-Jacobian inversion (blog's approach)
+       Solve: J·Δm = e/η where J[H] ≈ H·(m̃ᵀm̃)^{-1/2} (frozen right factor)
+       Δm = (e/η)·(m̃ᵀm̃)^{1/2}, computed via eigendecomposition of the Gram matrix
 
     4. "pre_ns": Inject error before Newton-Schulz transformation
        m ← m + (1/η)(1 - 1/β)·e, then u = NS(m)
@@ -114,7 +115,6 @@ class ECOMuon(Optimizer):
         quantize_weights: Simulate quantized weight storage (default: True)
         quant_dtype: Quantization dtype string (default: "bf16")
             Options: "fp8", "bf16"
-        jacobian_fd_eps: Finite difference epsilon for Jacobian (default: 1e-5)
         master_weights_dtype: Dtype for master weights buffer. None means no
             master weights (pure ECO). torch.float32 or torch.bfloat16 creates
             a separate high-precision copy (traditional quantized training).
@@ -143,7 +143,6 @@ class ECOMuon(Optimizer):
         heuristic_log_freq: int = 0,
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
-        jacobian_fd_eps: float = 1e-5,
         master_weights_dtype: torch.dtype | None = None,
         include_weight_decay_in_injection: bool = True,
         exclude_from_muon: frozenset[int] = frozenset(),
@@ -204,7 +203,6 @@ class ECOMuon(Optimizer):
         self._heuristic_log_freq = heuristic_log_freq
         self._quantize_weights = quantize_weights
         self._quant_dtype = quant_dtype
-        self._jacobian_fd_eps = jacobian_fd_eps
         self._master_weights_dtype = master_weights_dtype
         self._include_weight_decay_in_injection = include_weight_decay_in_injection
         self._eco_step_count = 0
@@ -431,9 +429,9 @@ class ECOMuon(Optimizer):
                     layer_metrics["eco/muon/injection_scale"].append(injection_coeff.item())
 
             elif self._eco_approach == "jacobian":
-                # Approach 3: Jacobian-based (finite differences)
+                # Approach 3: Analytical frozen-Jacobian inversion
                 delta_m = self._compute_jacobian_injection(
-                    m_tilde, error, lr, momentum, ns_steps
+                    m_tilde, error, lr, momentum, weight_decay
                 )
 
             elif self._eco_approach == "pre_ns":
@@ -572,7 +570,7 @@ class ECOMuon(Optimizer):
 
             elif self._eco_approach == "jacobian":
                 delta_m = self._compute_jacobian_injection(
-                    m_tilde, error, lr, momentum, ns_steps
+                    m_tilde, error, lr, momentum, weight_decay
                 )
 
             elif self._eco_approach == "pre_ns":
@@ -632,57 +630,29 @@ class ECOMuon(Optimizer):
         error: torch.Tensor,
         lr: float,
         momentum: float,
-        ns_steps: int,
         weight_decay: float = 0.0,
     ) -> torch.Tensor:
-        """Compute Δm such that η·J·Δm ≈ e where J = ∂NS(m)/∂m.
+        """Compute Δm via the analytical frozen-Jacobian inversion.
 
-        We use finite differences to approximate J·v for arbitrary v,
-        then solve the linear system using conjugate gradient.
+        The Fréchet derivative of P(M) = M(MᵀM)^{-1/2} (polar factor map),
+        freezing the right factor, gives J[H] ≈ H · (MᵀM)^{-1/2}.
+        Inverting: Δm = (e/η) · (MᵀM)^{1/2}
+
+        No √(n/m) factor is needed since our NS returns the polar factor
+        directly, without the RMS-to-RMS scaling convention in the blog.
         """
-        # Target: η·J·Δm = e
-        # So we want: J·Δm = e/η
-        target = error / lr
-        wd_factor = 1.0
+        injection_coeff = (1.0 / lr) * (1.0 - 1.0 / momentum)
         if self._include_weight_decay_in_injection and weight_decay != 0:
-            wd_factor = 1.0 - lr * weight_decay
-        target *= wd_factor
+            injection_coeff *= 1.0 - lr * weight_decay
 
-        # Define Jacobian-vector product using finite differences
-        def jvp(v):
-            """Jacobian-vector product J·v ≈ [NS(m+εv) - NS(m-εv)] / (2ε)"""
-            eps = self._jacobian_fd_eps
-            m_plus = m + eps * v
-            m_minus = m - eps * v
-            ns_plus = zeropower_via_newtonschulz5(m_plus, steps=ns_steps)
-            ns_minus = zeropower_via_newtonschulz5(m_minus, steps=ns_steps)
-            return (ns_plus - ns_minus) / (2 * eps)
-
-        # Solve J·Δm = target using conjugate gradient
-        # Start with naive SGDM injection as initial guess
-        delta_m = (1.0 / lr) * (1.0 - 1.0 / momentum) * error
-        delta_m *= wd_factor
-
-        # CG iterations
-        r = target - jvp(delta_m)  # residual
-        p = r.clone()  # search direction
-        rs_old = (r * r).sum()
-
-        for _ in range(min(10, m.numel())):  # Max 10 CG steps
-            Ap = jvp(p)
-            alpha = rs_old / ((p * Ap).sum() + 1e-12)
-            delta_m = delta_m + alpha * p
-            r = r - alpha * Ap
-            rs_new = (r * r).sum()
-
-            if rs_new < 1e-10:  # Converged
-                break
-
-            beta = rs_new / (rs_old + 1e-12)
-            p = r + beta * p
-            rs_old = rs_new
-
-        return delta_m
+        # Compute error · (mᵀm)^{1/2} via eigendecomposition of the Gram matrix.
+        # m: (rows, cols) → mᵀm: (cols, cols) PSD.
+        # Avoids forming the full sqrt matrix: error @ V @ diag(√λ) @ Vᵀ.
+        gram = m.T @ m
+        eigvals, eigvecs = torch.linalg.eigh(gram)
+        sqrt_eigvals = eigvals.clamp(min=0).sqrt()
+        e_V = error @ eigvecs
+        return injection_coeff * ((e_V * sqrt_eigvals) @ eigvecs.T)
 
     # ------------------------------------------------------------------
     # Adam for 1D params (biases, norms, embeddings)
