@@ -664,8 +664,8 @@ def run_sweep(variations, base_config, output_dir, experiment, expected, extra,
             if worker:
                 loc = f"{_MAGENTA}{worker}{_RESET} gpu {gpu}"
             else:
-                loc = ""
-            sweep_print(f"  {tag}  {_GREEN}{nm}{_RESET} {elapsed:.1f}s [{nr}/{expected} resolved] {loc} {_BLUE}{log}{_RESET}")
+                loc = f"gpu {gpu}"
+            sweep_print(f"  {tag}  {_GREEN}{nm}{_RESET} {loc} {_BLUE}{log}{_RESET} {elapsed:.1f}s [{nr}/{expected} resolved]")
 
         return
 

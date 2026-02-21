@@ -48,7 +48,8 @@ def list_experiments(repo_url):
     """Return all Aim experiment names, sorted newest-first."""
     repo = aim_sdk.Repo(repo_url)
     latest = {}  # experiment name -> newest created_at seen
-    for run in repo.iter_runs():
+    for r in repo.query_runs('').iter_runs():
+        run = r.run
         if run.experiment:
             t = run.created_at
             if run.experiment not in latest or t > latest[run.experiment]:
@@ -68,7 +69,7 @@ def load_experiment_meta(experiment_name, repo_url):
     ("key=value" strings set by run_sweep.py).
     """
     repo = aim_sdk.Repo(repo_url)
-    aim_runs = [r for r in repo.iter_runs() if r.experiment == experiment_name]
+    aim_runs = [r.run for r in repo.query_runs('').iter_runs() if r.run.experiment == experiment_name]
 
     axis_values = {}
     runs        = []
@@ -94,8 +95,28 @@ def load_experiment_meta(experiment_name, repo_url):
         return                                  (2, str(v))
 
     axes = {k: sorted(vs, key=val_sort_key) for k, vs in axis_values.items()}
+
+    # Detect sub-axes: axes that only appear in runs where some other axis has a specific value.
+    # e.g. "approach" only appears when "optimizer"="muon".
+    all_hashes = {r["hash"] for r in runs}
+    hashes_with = {ax: {r["hash"] for r in runs if ax in r["combo"]} for ax in axes}
+    sub_axes = {}
+    for axis in axes:
+        if hashes_with[axis] == all_hashes:
+            continue  # universal axis
+        for parent_axis in axes:
+            if parent_axis == axis:
+                continue
+            for parent_val in axes[parent_axis]:
+                hashes_with_parent = {r["hash"] for r in runs if r["combo"].get(parent_axis) == parent_val}
+                if hashes_with_parent == hashes_with[axis]:
+                    sub_axes[axis] = {"parentAxis": parent_axis, "parentValue": parent_val}
+                    break
+            if axis in sub_axes:
+                break
+
     return {"experiment": experiment_name, "axes": axes, "runs": runs,
-            "metricNames": sorted(metric_names)}
+            "metricNames": sorted(metric_names), "subAxes": sub_axes}
 
 
 def load_metric_data(experiment_name, metric_name, repo_url):
@@ -213,6 +234,11 @@ select:focus { outline: none; border-color: #4c9be8; }
 .color-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
                 border: 1px solid var(--swatch-border); }
 .check-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sub-filter-group { margin-top: 4px; margin-left: 10px; padding-left: 4px;
+                    border-left: 2px solid var(--border); }
+.sub-filter-group .axis-label { font-size: 10px; color: var(--text-dim); }
+.sub-filter-group.hidden { display: none; }
 
 .row { display: flex; gap: 8px; align-items: center; }
 .row label { font-size: 12px; white-space: nowrap; }
@@ -360,21 +386,29 @@ function metricColorsForRuns(runs, metricName) {
   }));
 }
 
+// Iterate combo entries in axis order (matches sidebar), skipping missing keys.
+function orderedComboEntries(combo, skipAxis) {
+  return Object.keys(DATA.axes)
+    .filter(k => k !== skipAxis && k in combo)
+    .map(k => [k, combo[k]]);
+}
+
 // Hover label: all combo key=value pairs except the color axis.
 function comboLabel(combo, skipAxis) {
-  return Object.entries(combo)
-    .filter(([k]) => k !== skipAxis)
+  return orderedComboEntries(combo, skipAxis)
     .map(([k, v]) => `${k}=${v}`)
     .join("  ");
 }
 
 function hoverText(combo) {
-  return Object.entries(combo).map(([k, v]) => `<b>${k}</b>: ${v}`).join("<br>");
+  return orderedComboEntries(combo, null)
+    .map(([k, v]) => `<b>${k}</b>: ${v}`)
+    .join("<br>");
 }
 
 function visibleRuns() {
   return DATA.runs.filter(r =>
-    Object.entries(filters).every(([axis, vals]) => vals.has(r.combo[axis]))
+    Object.entries(filters).every(([axis, vals]) => !(axis in r.combo) || vals.has(r.combo[axis]))
   );
 }
 
@@ -394,7 +428,12 @@ function yRangeOf(runs) {
 // ── Chart ─────────────────────────────────────────────────────────────────────
 
 function buildChart() {
-  const runs = visibleRuns();
+  let runs = visibleRuns();
+
+  // When coloring by a sub-axis, hide runs that don't have that axis.
+  const subAxisInfo = DATA.subAxes || {};
+  if (!colorBy.startsWith("_m:") && subAxisInfo[colorBy])
+    runs = runs.filter(r => colorBy in r.combo);
 
   // Set up per-run color and legend-group helpers depending on color mode.
   // colorBy is either a plain axis name or "_m:<metric>" for metric coloring.
@@ -410,16 +449,22 @@ function buildChart() {
   } else {
     const cmap      = colorMap(DATA.axes[colorBy] || []);
     const firstSeen = new Set();
-    getColor        = r     => cmap[r.combo[colorBy]] || "#888";
-    getGroup        = r     => String(r.combo[colorBy]);
+    getColor  = r => cmap[r.combo[colorBy]] || "#888";
+    getGroup  = r => String(r.combo[colorBy]);
     // showLegendFor tracks which groups have been seen so only the first
     // trace per group gets a legend entry.
     showLegendFor   = group => { const f = !firstSeen.has(group); if (f) firstSeen.add(group); return f; };
     legendGroupTitle = (group, isFirst) => isFirst ? { text: colorBy, font: { size: 11 } } : undefined;
   }
 
+  // Read theme colors up front (needed for dot border color).
+  const cs = getComputedStyle(document.documentElement);
+  const plotBg   = cs.getPropertyValue("--plot-bg").trim();
+  const plotGrid = cs.getPropertyValue("--plot-grid").trim();
+  const plotText = cs.getPropertyValue("--plot-text").trim();
+
   const mcache = METRIC_CACHE[metric] || {};
-  const traces = runs.map(r => {
+  const lineTraces = runs.map(r => {
     const color   = getColor(r);
     const group   = getGroup(r);
     const isFirst = showLegendFor(group);
@@ -438,11 +483,26 @@ function buildChart() {
     };
   });
 
-  // Read theme colors from CSS variables so the chart matches light/dark mode.
-  const cs = getComputedStyle(document.documentElement);
-  const plotBg   = cs.getPropertyValue("--plot-bg").trim();
-  const plotGrid = cs.getPropertyValue("--plot-grid").trim();
-  const plotText = cs.getPropertyValue("--plot-text").trim();
+  // One dot per run at the final data point.
+  const dotTraces = runs.map(r => {
+    const color = getColor(r);
+    const group = getGroup(r);
+    const mdata = mcache[r.hash] || {};
+    const steps  = mdata.steps  || [];
+    const vals   = ema(mdata.values || [], smoothAlpha);
+    const lastX  = steps.length  ? [steps[steps.length - 1]]  : [];
+    const lastY  = vals.length   ? [vals[vals.length - 1]]    : [];
+    return {
+      x: lastX, y: lastY,
+      mode: "markers",
+      marker: { color, size: 6, line: { color: plotBg, width: 1.5 } },
+      legendgroup: group,
+      showlegend: false,
+      hoverinfo: "skip",
+    };
+  });
+
+  const traces = [...lineTraces, ...dotTraces];
 
   Plotly.react("chart", traces, {
     margin: { t: 20, r: 20, b: 50, l: 60 },
@@ -461,18 +521,27 @@ function buildChart() {
 // ── Sidebar builders ──────────────────────────────────────────────────────────
 
 function buildFilters() {
-  const cmap      = colorMap(DATA.axes[colorBy] || []);
+  const subAxisInfo = DATA.subAxes || {};
+  const subAxisSet  = new Set(Object.keys(subAxisInfo));
+
+  // childrenOf["parentAxis:parentValue"] = [childAxis, ...]
+  const childrenOf = {};
+  for (const [axis, info] of Object.entries(subAxisInfo)) {
+    const key = `${info.parentAxis}:${info.parentValue}`;
+    (childrenOf[key] = childrenOf[key] || []).push(axis);
+  }
+
   const container = document.getElementById("filters");
   container.innerHTML = "";
 
-  for (const [axis, values] of Object.entries(DATA.axes)) {
-    // Show color swatches next to checkboxes only for the active color axis.
+  // Build a filter-group div for a given axis (top-level or sub).
+  function makeFilterGroup(axis, values, extraClass) {
     const isColorAxis = !colorBy.startsWith("_m:") && axis === colorBy;
+    const cmap_       = isColorAxis ? colorMap(values) : {};
 
     const group = document.createElement("div");
-    group.className = "filter-group";
+    group.className = "filter-group" + (extraClass ? " " + extraClass : "");
 
-    // Header: axis label + all/none buttons
     const header = document.createElement("div");
     header.className = "filter-header";
     header.innerHTML = `<span class="axis-label">${axis}</span>`;
@@ -483,7 +552,8 @@ function buildFilters() {
       b.textContent = action;
       b.onclick = () => {
         filters[axis] = action === "all" ? new Set(values) : new Set();
-        group.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = action === "all"; });
+        group.querySelectorAll(`input[data-axis="${CSS.escape(axis)}"]`)
+             .forEach(cb => { cb.checked = action === "all"; });
         buildChart();
       };
       btns.appendChild(b);
@@ -491,7 +561,6 @@ function buildFilters() {
     header.appendChild(btns);
     group.appendChild(header);
 
-    // Checkbox list
     const list = document.createElement("div");
     list.className = "checkbox-list";
     for (const val of values) {
@@ -500,6 +569,7 @@ function buildFilters() {
 
       const cb = document.createElement("input");
       cb.type = "checkbox";
+      cb.dataset.axis = axis;
       cb.checked = filters[axis]?.has(val) ?? true;
       cb.addEventListener("change", () => {
         if (cb.checked) filters[axis].add(val); else filters[axis].delete(val);
@@ -510,7 +580,7 @@ function buildFilters() {
       if (isColorAxis) {
         const swatch = document.createElement("div");
         swatch.className = "color-swatch";
-        swatch.style.background = cmap[val] || "#ccc";
+        swatch.style.background = cmap_[val] || "#ccc";
         row.appendChild(swatch);
       }
 
@@ -519,15 +589,29 @@ function buildFilters() {
       lbl.textContent = val;
       row.appendChild(lbl);
       list.appendChild(row);
+
+      // Nest any child axes under this value, hidden when the value is unchecked.
+      for (const childAxis of (childrenOf[`${axis}:${val}`] || [])) {
+        const childGroup = makeFilterGroup(childAxis, DATA.axes[childAxis] || [], "sub-filter-group");
+        if (!cb.checked) childGroup.classList.add("hidden");
+        cb.addEventListener("change", () => childGroup.classList.toggle("hidden", !cb.checked));
+        list.appendChild(childGroup);
+      }
     }
 
     group.appendChild(list);
-    container.appendChild(group);
+    return group;
+  }
+
+  for (const [axis, values] of Object.entries(DATA.axes)) {
+    if (subAxisSet.has(axis)) continue;  // rendered inline under parent
+    container.appendChild(makeFilterGroup(axis, values, null));
   }
 }
 
 function buildColorBySelect() {
-  const container = document.getElementById("color-by");
+  const container   = document.getElementById("color-by");
+  const subAxisInfo = DATA.subAxes || {};
   container.innerHTML = "";
 
   for (const axis of Object.keys(DATA.axes)) {
@@ -537,7 +621,8 @@ function buildColorBySelect() {
 
     const lbl = document.createElement("label");
     lbl.htmlFor = id;
-    lbl.textContent = axis;
+    const info = subAxisInfo[axis];
+    lbl.textContent = info ? `${axis} (${info.parentValue})` : axis;
     if (axis === colorBy) lbl.classList.add("checked");
 
     input.addEventListener("change", () => {
