@@ -21,7 +21,7 @@ from torch.distributed.tensor import Replicate
 from torch.optim import Optimizer
 
 from torchtitan.components.ft import FTManager, has_torchft
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 from torchtitan.components.eco_muon import ECOMuon
 from torchtitan.config import JobConfig, Optimizer as OptimizerConfig
 from torchtitan.distributed import ParallelDims

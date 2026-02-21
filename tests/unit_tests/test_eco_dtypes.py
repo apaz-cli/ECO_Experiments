@@ -23,7 +23,7 @@ Paper specifies (Algorithm 3, Section 5 memory analysis):
 import pytest
 import torch
 
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 from torchtitan.components.quantized_tensor import QuantizedTensor
 
 

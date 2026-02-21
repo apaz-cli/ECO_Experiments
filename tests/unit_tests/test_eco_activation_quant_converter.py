@@ -321,7 +321,7 @@ class TestFP8Storage:
 class TestCompositionWithECO:
     def test_eco_plus_activation_quant_convergence(self):
         """ECOAdamW (simulated weight quant) + activation quant should converge."""
-        from torchtitan.components.eco_optimizer import ECOAdamW
+        from torchtitan.components.eco_adamw import ECOAdamW
 
         torch.manual_seed(42)
 
@@ -363,7 +363,7 @@ class TestCompositionWithECO:
 
     def test_eco_without_activation_quant_convergence(self):
         """ECOAdamW without activation quant should also converge (baseline)."""
-        from torchtitan.components.eco_optimizer import ECOAdamW
+        from torchtitan.components.eco_adamw import ECOAdamW
 
         torch.manual_seed(42)
 
@@ -398,7 +398,7 @@ class TestCompositionWithECO:
     def test_parameter_identity_after_optimizer_step(self):
         """After optimizer.step(), the wrapped module's params should still be
         the same objects that the optimizer holds."""
-        from torchtitan.components.eco_optimizer import ECOAdamW
+        from torchtitan.components.eco_adamw import ECOAdamW
 
         model = nn.Module()
         model.layers = nn.Sequential(nn.Linear(8, 4))
@@ -428,7 +428,7 @@ class TestConvergence:
         Note: HardwareQuantLinear uses QuantizedTensor weights, which require
         ECOAdamW (not standard AdamW) for correct in-place parameter updates.
         """
-        from torchtitan.components.eco_optimizer import ECOAdamW
+        from torchtitan.components.eco_adamw import ECOAdamW
 
         torch.manual_seed(42)
 

@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torchtitan.components.optimizer import build_optimizers
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 from torchtitan.components.quantized_linear import QuantizedLinear
 from torchtitan.components.quantized_tensor import QuantizedTensor
 from torchtitan.config import ConfigManager

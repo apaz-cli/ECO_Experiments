@@ -2,7 +2,7 @@
 
 STUB - NOT USED.  These kernels are placeholders for future H100-native
 ECO steps.  The current ECO implementation lives entirely in
-torchtitan/components/eco_optimizer.py (pure PyTorch).
+torchtitan/components/eco_adamw.py (pure PyTorch).
 
 This module provides Triton/CUDA kernels for:
 1. Quantized matmul (FP8 x FP8 -> BF16)

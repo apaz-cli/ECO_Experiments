@@ -25,7 +25,7 @@ from torchtitan.components.quant_gemm import (
     HardwareQuantLinear,
 )
 from torchtitan.components.activation_quant import ActivationQuantLinear, ActivationQuantConverter
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 
 
 # ---------------------------------------------------------------------------

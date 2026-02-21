@@ -14,7 +14,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 
 
 # ======================================================================

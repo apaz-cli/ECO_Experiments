@@ -18,7 +18,7 @@ from torch.distributed.checkpoint.state_dict import (
     StateDictOptions,
 )
 
-from torchtitan.components.eco_optimizer import ECOAdamW
+from torchtitan.components.eco_adamw import ECOAdamW
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA not available"
