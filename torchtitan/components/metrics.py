@@ -491,6 +491,7 @@ class MetricsProcessor:
         self.ntokens_since_last_log = 0
         self.data_loading_times = []
         self.time_last_log = time.perf_counter()
+        self.start_time = self.time_last_log
         self.device_memory_monitor.reset_peak_stats()
 
         # These variables have to be set later as they depend on other components or model.
@@ -570,6 +571,7 @@ class MetricsProcessor:
             "time_metrics/end_to_end(s)": time_end_to_end,
             "time_metrics/data_loading(s)": time_data_loading,
             "time_metrics/data_loading(%)": time_data_loading_pct,
+            "time_metrics/total_elapsed(s)": time.perf_counter() - self.start_time,
             "memory/max_active(GiB)": device_mem_stats.max_active_gib,
             "memory/max_active(%)": device_mem_stats.max_active_pct,
             "memory/max_reserved(GiB)": device_mem_stats.max_reserved_gib,
