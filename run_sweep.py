@@ -195,7 +195,7 @@ def validate_options(options, _ancestor_keys=None):
 
 def _make_part(nm, val):
     """Build a name part string from dim name and value, or None if no name/value."""
-    if nm is None or val is None:
+    if nm is None:
         return None
     if isinstance(val, bool):
         return f"{nm}{'T' if val else 'F'}"
@@ -761,7 +761,7 @@ def print_summary(results, skipped, elapsed):
                 f" ({', '.join(parts)})")
     sweep_print(f"{'=' * 80}")
 
-    for tk in sorted(treatments):
+    for tk in sorted(treatments, key=lambda t: tuple('' if v is None else str(v) for v in t)):
         runs = treatments[tk]
         successes = [(v, e, lf) for v, s, e, lf in runs if s]
         if successes:
@@ -945,8 +945,9 @@ def main():
         sweep_print(f"{'=' * 80}")
         return
 
+    run_desc = f"{expected} runs, {n} possible" if expected < n else f"{n} runs"
     sweep_print(f"\n{'=' * 80}")
-    sweep_print("Starting sweep")
+    sweep_print(f"Starting sweep - ({run_desc})")
     sweep_print(f"{'=' * 80}\n")
 
     results, skipped, elapsed = run_sweep(

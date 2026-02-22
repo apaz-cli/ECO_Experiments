@@ -431,7 +431,7 @@ class ECOMuon(Optimizer):
             elif self._eco_approach == "jacobian":
                 # Approach 3: Analytical frozen-Jacobian inversion
                 delta_m = self._compute_jacobian_injection(
-                    m_tilde, error, lr, momentum, weight_decay
+                    m_tilde, error, lr, momentum, weight_decay, ns_steps=ns_steps
                 )
 
             elif self._eco_approach == "pre_ns":
@@ -631,6 +631,7 @@ class ECOMuon(Optimizer):
         lr: float,
         momentum: float,
         weight_decay: float = 0.0,
+        ns_steps: int = 5,
     ) -> torch.Tensor:
         """Compute Δm via the analytical frozen-Jacobian inversion.
 
@@ -645,14 +646,11 @@ class ECOMuon(Optimizer):
         if self._include_weight_decay_in_injection and weight_decay != 0:
             injection_coeff *= 1.0 - lr * weight_decay
 
-        # Compute error · (mᵀm)^{1/2} via eigendecomposition of the Gram matrix.
-        # m: (rows, cols) → mᵀm: (cols, cols) PSD.
-        # Avoids forming the full sqrt matrix: error @ V @ diag(√λ) @ Vᵀ.
-        gram = m.T @ m
-        eigvals, eigvecs = torch.linalg.eigh(gram)
-        sqrt_eigvals = eigvals.clamp(min=0).sqrt()
-        e_V = error @ eigvecs
-        return injection_coeff * ((e_V * sqrt_eigvals) @ eigvecs.T)
+        # Compute error · (mᵀm)^{1/2} via Newton-Schulz polar factor.
+        # If NS(m) ≈ U Vᵀ, then NS(m)ᵀ @ m = V Σ Vᵀ = (mᵀm)^{1/2}.
+        # Avoids torch.linalg.eigh which fails for ill-conditioned matrices.
+        polar = zeropower_via_newtonschulz5(m, steps=ns_steps)
+        return injection_coeff * (error @ (polar.T @ m))
 
     # ------------------------------------------------------------------
     # Adam for 1D params (biases, norms, embeddings)
