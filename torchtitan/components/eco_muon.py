@@ -10,7 +10,7 @@ Implements ECO for the Muon optimizer, which uses Newton-Schulz iterations
 to approximate the polar decomposition of momentum.
 
 Muon update:
-    m_{t+1} = β·m_t + g_t  (no (1-β) scaling)
+    m_{t+1} = β·m_t + (1-β)·g_t  (weighted average)
     u_{t+1} = zeropower_via_newtonschulz5(m_{t+1})  (orthogonal polar factor)
     θ_{t+1} = θ_t - η·u_{t+1}
 
@@ -138,7 +138,7 @@ class ECOMuon(Optimizer):
         optim_state_dtype: torch.dtype = torch.float32,
         optim_compute_dtype: torch.dtype = torch.float32,
         eco_enabled: bool = True,
-        eco_approach: str = "frobenius",
+        eco_approach: str = "jacobian",
         stochastic_rounding: bool = False,
         heuristic_log_freq: int = 0,
         quantize_weights: bool = True,
@@ -328,8 +328,8 @@ class ECOMuon(Optimizer):
         ns_steps: int,
         weight_decay: float,
     ) -> None:
-        # Muon momentum: m = β·m + g (no (1-β) scaling)
-        momentum_buffer.mul_(momentum).add_(grad)
+        # Muon momentum: m = β·m + (1-β)·g (weighted average)
+        momentum_buffer.mul_(momentum).add_(grad, alpha=1 - momentum)
 
         # Newton-Schulz to get orthogonal update
         update = zeropower_via_newtonschulz5(momentum_buffer, steps=ns_steps)
@@ -379,8 +379,8 @@ class ECOMuon(Optimizer):
             m_c = momentum_buffer.to(optim_compute_dtype)
             copy_back = True
 
-        # 1. Update momentum (Muon style: no (1-β) scaling)
-        m_c.mul_(momentum).add_(grad_compute)
+        # 1. Update momentum (weighted average: M̃ = β·M + (1-β)·G)
+        m_c.mul_(momentum).add_(grad_compute, alpha=1 - momentum)
 
         # 2. Apply update based on ECO approach
         if self._eco_approach == "pre_ns":
@@ -532,8 +532,8 @@ class ECOMuon(Optimizer):
             m_c = momentum_buffer.to(optim_compute_dtype)
             copy_back = True
 
-        # Update momentum
-        m_c.mul_(momentum).add_(grad_compute)
+        # Update momentum (weighted average: M̃ = β·M + (1-β)·G)
+        m_c.mul_(momentum).add_(grad_compute, alpha=1 - momentum)
 
         # Compute NS update
         m_tilde = m_c.clone()

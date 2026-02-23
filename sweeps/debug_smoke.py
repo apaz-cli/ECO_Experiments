@@ -35,7 +35,7 @@ OPTIONS = {
         "name": "qd",
     },
     ".master_weights_dtype": {
-        "values": [None, "fp32"],
+        "values": [None, "bf16", "fp32"],
         "flags": "--eco.master-weights-dtype",
         "name": "mw",
     },

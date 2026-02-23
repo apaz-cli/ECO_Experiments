@@ -84,7 +84,7 @@ class ECOAdamW(Optimizer):
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
         master_weights_dtype: torch.dtype | None = None,
-        include_weight_decay_in_injection: bool = False,
+        include_weight_decay_in_injection: bool = True,
         exclude_from_quant: frozenset | None = None,
     ):
         if lr < 0.0:

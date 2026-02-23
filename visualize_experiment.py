@@ -181,8 +181,8 @@ body { font-family: system-ui, -apple-system, sans-serif; display: flex;
 
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 12px; gap: 8px; }
 
-#chart { flex: 1; min-height: 0; border: 1px solid var(--border);
-         border-radius: 6px; background: var(--plot-bg); }
+.chart-pane { flex: 1; min-height: 0; border: 1px solid var(--border);
+              border-radius: 6px; background: var(--plot-bg); }
 
 h1 { font-size: 13px; font-weight: 700; color: var(--text-strong); }
 .exp-name { font-size: 10px; color: var(--text-muted); word-break: break-all; margin-top: 2px; }
@@ -245,6 +245,16 @@ select:focus { outline: none; border-color: #4c9be8; }
 .row input[type=range] { flex: 1; }
 #smooth-val { font-size: 11px; color: var(--text-dim); min-width: 28px; text-align: right; }
 
+/* ── Tab bar ── */
+#topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#tabs { display: flex; gap: 3px; }
+.tab { font-size: 11px; padding: 3px 12px; border: 1px solid var(--border-input);
+       border-radius: 4px; cursor: pointer; background: var(--btn-bg); color: var(--btn-text);
+       font-family: inherit; }
+.tab:hover { background: var(--btn-hover); }
+.tab.active { background: var(--radio-checked-bg); border-color: var(--radio-checked-border);
+              color: var(--radio-checked-color); font-weight: 600; }
+
 #statusbar { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 #status { font-size: 11px; color: var(--text-muted); }
 
@@ -270,12 +280,13 @@ select:focus { outline: none; border-color: #4c9be8; }
     <select id="metric-sel"></select>
   </div>
 
-  <div class="section">
+  <!-- Curves-only controls -->
+  <div class="section curves-only">
     <div class="section-title">Color by</div>
     <div id="color-by" class="radio-row"></div>
   </div>
 
-  <div class="section">
+  <div class="section curves-only">
     <div class="section-title">Smoothing (EMA)</div>
     <div class="row">
       <input type="range" id="smoothing" min="0" max="0.99" step="0.01" value="0">
@@ -290,11 +301,18 @@ select:focus { outline: none; border-color: #4c9be8; }
 </div>
 
 <div id="main">
-  <div id="statusbar">
-    <div id="status"></div>
-    <button id="theme-toggle" title="Switch to dark mode">☾</button>
+  <div id="topbar">
+    <div id="tabs">
+      <button class="tab active" data-tab="curves">Curves</button>
+      <button class="tab" data-tab="sensitivity">Sensitivity</button>
+    </div>
+    <div id="statusbar">
+      <div id="status"></div>
+      <button id="theme-toggle" title="Switch to dark mode">☾</button>
+    </div>
   </div>
-  <div id="chart"></div>
+  <div id="chart-curves" class="chart-pane"></div>
+  <div id="chart-sensitivity" class="chart-pane" style="display:none"></div>
 </div>
 
 <script>
@@ -308,11 +326,45 @@ const PALETTE = [
 
 let DATA         = null;  // experiment metadata from /data.json
 let METRIC_CACHE = {};    // metric_name → {run_hash: {steps, values}}, loaded on demand
-let colorBy      = null;  // axis name to color by (set on load)
+let colorBy      = null;  // axis name to color by (curves tab)
 let metric       = "loss";
 let smoothAlpha  = 0;     // EMA alpha; 0 = disabled
 let filters      = {};    // axis → Set of visible values
 let METRIC_NAMES = [];    // populated by buildMetricSelect
+
+let activeTab    = "curves";
+const dirtyTabs  = new Set(["curves", "sensitivity"]);
+
+// ── Tab management ────────────────────────────────────────────────────────────
+
+function renderTab(name) {
+  if (!DATA || !METRIC_CACHE[metric]) return;
+  dirtyTabs.delete(name);
+  if (name === "curves") buildCurvesChart();
+  else if (name === "sensitivity") buildSensitivityChart();
+}
+
+function setTab(name) {
+  activeTab = name;
+  document.querySelectorAll(".tab").forEach(b =>
+    b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".curves-only").forEach(el =>
+    el.style.display = (name === "curves") ? "" : "none");
+  // Show the active pane, hide the other.
+  document.querySelectorAll(".chart-pane").forEach(el => el.style.display = "none");
+  const pane = document.getElementById(`chart-${name}`);
+  pane.style.display = "";
+  // Only re-render if data changed since last render; otherwise just reveal.
+  if (dirtyTabs.has(name)) renderTab(name);
+  else Plotly.relayout(pane, {});
+}
+
+// Mark all tabs dirty and re-render the active one. Called when data changes.
+function buildActiveChart() {
+  dirtyTabs.add("curves");
+  dirtyTabs.add("sensitivity");
+  renderTab(activeTab);
+}
 
 // ── Theme ─────────────────────────────────────────────────────────────────────
 
@@ -332,11 +384,15 @@ let METRIC_NAMES = [];    // populated by buildMetricSelect
     const dark = root.getAttribute("data-theme") !== "dark";
     localStorage.setItem("theme", dark ? "dark" : "light");
     applyTheme(dark);
-    if (DATA) buildChart();  // re-render so Plotly picks up new CSS colors
+    if (DATA) buildActiveChart();
   });
 })();
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
 // Exponential moving average; treats null/non-finite values as gaps.
 function ema(vals, alpha) {
@@ -358,7 +414,7 @@ function colorMap(axisValues) {
   return m;
 }
 
-// Interpolate blue (#1565C0) → red (#C62828) for metric-based coloring.
+// Interpolate blue (#1565C0) → red (#C62828).
 function lerpColor(t) {
   const r = Math.round(0x15 + (0xC6 - 0x15) * t);
   const g = Math.round(0x65 + (0x28 - 0x65) * t);
@@ -367,7 +423,6 @@ function lerpColor(t) {
 }
 
 // Return a run-name → color map based on each run's final value of metricName.
-// Colors are scaled relative to all runs (not just visible ones) for consistency.
 function metricColorsForRuns(runs, metricName) {
   const cache = METRIC_CACHE[metricName] || {};
   const finals = runs.map(r => {
@@ -386,14 +441,12 @@ function metricColorsForRuns(runs, metricName) {
   }));
 }
 
-// Iterate combo entries in axis order (matches sidebar), skipping missing keys.
 function orderedComboEntries(combo, skipAxis) {
   return Object.keys(DATA.axes)
     .filter(k => k !== skipAxis && k in combo)
     .map(k => [k, combo[k]]);
 }
 
-// Hover label: all combo key=value pairs except the color axis.
 function comboLabel(combo, skipAxis) {
   return orderedComboEntries(combo, skipAxis)
     .map(([k, v]) => `${k}=${v}`)
@@ -412,8 +465,6 @@ function visibleRuns() {
   );
 }
 
-// Compute y-axis range with a small pad. Always uses ALL runs (not just visible)
-// so the axis stays fixed when toggling checkboxes.
 function yRangeOf(runs) {
   const cache = METRIC_CACHE[metric] || {};
   let lo = Infinity, hi = -Infinity;
@@ -425,9 +476,36 @@ function yRangeOf(runs) {
   return [lo - pad, hi + pad];
 }
 
-// ── Chart ─────────────────────────────────────────────────────────────────────
+// ── Shared helpers for analysis tabs ──────────────────────────────────────────
 
-function buildChart() {
+// Return the final logged value for a run from the currently-loaded metric.
+function runScalar(runHash) {
+  const cache = METRIC_CACHE[metric] || {};
+  const vals = (cache[runHash]?.values || []).filter(v => v !== null && isFinite(v));
+  return vals.length ? vals[vals.length - 1] : null;
+}
+
+// For each axis, compute per-value means and the overall effect size
+// (max_mean - min_mean). Returns array sorted descending by effect size.
+// Each element: { axis, effectSize, valueMeans: [{val, mean, scalars, count}] }
+function computeAxisEffects(runs) {
+  return Object.entries(DATA.axes).map(([axis, values]) => {
+    const valueMeans = values.map(val => {
+      const matching = runs.filter(r => r.combo[axis] === val);
+      const scalars = matching.map(r => runScalar(r.hash)).filter(v => v !== null);
+      const mean = scalars.length ? scalars.reduce((a, b) => a + b, 0) / scalars.length : null;
+      return { val, mean, scalars, count: scalars.length };
+    }).filter(vm => vm.mean !== null);
+    const means = valueMeans.map(vm => vm.mean);
+    const effectSize = means.length >= 2 ? Math.max(...means) - Math.min(...means) : 0;
+    return { axis, effectSize, valueMeans };
+  }).sort((a, b) => b.effectSize - a.effectSize);
+}
+
+// ── Tab: Curves ───────────────────────────────────────────────────────────────
+// The original loss-curve view. Color by any axis, smoothing, filters.
+
+function buildCurvesChart() {
   let runs = visibleRuns();
 
   // When coloring by a sub-axis, hide runs that don't have that axis.
@@ -435,8 +513,6 @@ function buildChart() {
   if (!colorBy.startsWith("_m:") && subAxisInfo[colorBy])
     runs = runs.filter(r => colorBy in r.combo);
 
-  // Set up per-run color and legend-group helpers depending on color mode.
-  // colorBy is either a plain axis name or "_m:<metric>" for metric coloring.
   const isMetricColor = colorBy.startsWith("_m:");
   let getColor, getGroup, showLegendFor, legendGroupTitle;
 
@@ -444,24 +520,20 @@ function buildChart() {
     const colorMap_ = metricColorsForRuns(DATA.runs, colorBy.slice(3));
     getColor        = r     => colorMap_.get(r.name) || "#888";
     getGroup        = r     => r.name;
-    showLegendFor   = ()    => false;      // no discrete legend for continuous color
+    showLegendFor   = ()    => false;
     legendGroupTitle = ()   => undefined;
   } else {
     const cmap      = colorMap(DATA.axes[colorBy] || []);
     const firstSeen = new Set();
     getColor  = r => cmap[r.combo[colorBy]] || "#888";
     getGroup  = r => String(r.combo[colorBy]);
-    // showLegendFor tracks which groups have been seen so only the first
-    // trace per group gets a legend entry.
     showLegendFor   = group => { const f = !firstSeen.has(group); if (f) firstSeen.add(group); return f; };
     legendGroupTitle = (group, isFirst) => isFirst ? { text: colorBy, font: { size: 11 } } : undefined;
   }
 
-  // Read theme colors up front (needed for dot border color).
-  const cs = getComputedStyle(document.documentElement);
-  const plotBg   = cs.getPropertyValue("--plot-bg").trim();
-  const plotGrid = cs.getPropertyValue("--plot-grid").trim();
-  const plotText = cs.getPropertyValue("--plot-text").trim();
+  const plotBg   = cssVar("--plot-bg");
+  const plotGrid = cssVar("--plot-grid");
+  const plotText = cssVar("--plot-text");
 
   const mcache = METRIC_CACHE[metric] || {};
   const lineTraces = runs.map(r => {
@@ -504,7 +576,7 @@ function buildChart() {
 
   const traces = [...lineTraces, ...dotTraces];
 
-  Plotly.react("chart", traces, {
+  Plotly.react("chart-curves", traces, {
     margin: { t: 20, r: 20, b: 50, l: 60 },
     xaxis: { title: "step", gridcolor: plotGrid, color: plotText },
     yaxis: { title: metric, gridcolor: plotGrid, color: plotText,
@@ -516,6 +588,122 @@ function buildChart() {
 
   document.getElementById("status").textContent =
     `${runs.length} / ${DATA.runs.length} runs visible`;
+}
+
+// ── Tab: Sensitivity ──────────────────────────────────────────────────────────
+// Dumbbell dot chart: one row per dimension, dots at per-value means,
+// sorted by effect size (max_mean - min_mean). Tells you which knob matters most.
+
+function buildSensitivityChart() {
+  const runs    = visibleRuns();
+  const plotBg  = cssVar("--plot-bg");
+  const plotText = cssVar("--plot-text");
+  const plotGrid = cssVar("--plot-grid");
+
+  const effects = computeAxisEffects(runs);
+  if (!effects.length) {
+    Plotly.react("chart-sensitivity", [], { paper_bgcolor: plotBg, plot_bgcolor: plotBg }, { responsive: true });
+    document.getElementById("status").textContent = "No data";
+    return;
+  }
+
+  const traces = [];
+
+  // Dumbbell connector lines: from min_mean to max_mean for each axis.
+  effects.forEach(e => {
+    if (e.valueMeans.length < 2) return;
+    const xVals = e.valueMeans.map(vm => vm.mean);
+    const xMin = Math.min(...xVals), xMax = Math.max(...xVals);
+    traces.push({
+      type: "scatter",
+      mode: "lines",
+      x: [xMin, xMax],
+      y: [e.axis, e.axis],
+      line: { color: cssVar("--text-dim"), width: 2 },
+      showlegend: false,
+      hoverinfo: "skip",
+    });
+  });
+
+  // One scatter trace per unique value label for consistent cross-axis coloring.
+  const allLabels = [...new Set(
+    effects.flatMap(e => e.valueMeans.map(vm => String(vm.val)))
+  )];
+  const labelColorMap = Object.fromEntries(allLabels.map((l, i) => [l, PALETTE[i % PALETTE.length]]));
+
+  allLabels.forEach(label => {
+    const xs = [], ys = [], customdata = [];
+    effects.forEach(e => {
+      const vm = e.valueMeans.find(v => String(v.val) === label);
+      if (!vm) return;
+      xs.push(vm.mean);
+      ys.push(e.axis);
+      customdata.push({
+        axis: e.axis, val: label, count: vm.count,
+        effectSize: e.effectSize.toFixed(4),
+      });
+    });
+    if (!xs.length) return;
+    traces.push({
+      type: "scatter",
+      mode: "markers",
+      x: xs,
+      y: ys,
+      name: label,
+      marker: {
+        size: 12,
+        color: labelColorMap[label],
+        line: { color: plotBg, width: 2 },
+      },
+      customdata,
+      hovertemplate:
+        "<b>%{customdata.axis} = %{customdata.val}</b><br>" +
+        `Mean ${metric}: %{x:.4f}<br>` +
+        "n=%{customdata.count}<br>" +
+        "Effect size: %{customdata.effectSize}<extra></extra>",
+    });
+  });
+
+  // Effect size text annotations on the right.
+  const allMeans = effects.flatMap(e => e.valueMeans.map(vm => vm.mean));
+  const xMax = allMeans.length ? Math.max(...allMeans) : 1;
+  const xMin = allMeans.length ? Math.min(...allMeans) : 0;
+  const xPad = Math.max((xMax - xMin) * 0.22, 1e-6);
+
+  const annotations = effects.map(e => ({
+    x: xMax + xPad * 0.05,
+    y: e.axis,
+    xanchor: "left",
+    yanchor: "middle",
+    text: `Δ${e.effectSize.toFixed(4)}`,
+    showarrow: false,
+    font: { size: 10, color: plotText },
+  }));
+
+  Plotly.react("chart-sensitivity", traces, {
+    margin: { t: 50, r: 20, b: 60, l: 110 },
+    xaxis: {
+      title: `Mean ${metric} (final value)`,
+      gridcolor: plotGrid, color: plotText,
+      range: [xMin - xPad * 0.1, xMax + xPad],
+    },
+    yaxis: {
+      autorange: "reversed",   // top = highest effect size
+      color: plotText,
+      tickfont: { size: 11 },
+    },
+    paper_bgcolor: plotBg, plot_bgcolor: plotBg,
+    legend: { font: { size: 10, color: plotText } },
+    annotations,
+    title: {
+      text: "Dimension sensitivity — ranked by effect size (top = most impact)",
+      font: { color: plotText, size: 13 }, x: 0.5,
+    },
+    hovermode: "closest",
+  }, { responsive: true });
+
+  document.getElementById("status").textContent =
+    `${runs.length} runs · ${effects.length} dimensions`;
 }
 
 // ── Sidebar builders ──────────────────────────────────────────────────────────
@@ -534,7 +722,6 @@ function buildFilters() {
   const container = document.getElementById("filters");
   container.innerHTML = "";
 
-  // Build a filter-group div for a given axis (top-level or sub).
   function makeFilterGroup(axis, values, extraClass) {
     const isColorAxis = !colorBy.startsWith("_m:") && axis === colorBy;
     const cmap_       = isColorAxis ? colorMap(values) : {};
@@ -554,7 +741,7 @@ function buildFilters() {
         filters[axis] = action === "all" ? new Set(values) : new Set();
         group.querySelectorAll(`input[data-axis="${CSS.escape(axis)}"]`)
              .forEach(cb => { cb.checked = action === "all"; });
-        buildChart();
+        buildActiveChart();
       };
       btns.appendChild(b);
     });
@@ -573,7 +760,7 @@ function buildFilters() {
       cb.checked = filters[axis]?.has(val) ?? true;
       cb.addEventListener("change", () => {
         if (cb.checked) filters[axis].add(val); else filters[axis].delete(val);
-        buildChart();
+        buildActiveChart();
       });
       row.appendChild(cb);
 
@@ -590,7 +777,7 @@ function buildFilters() {
       row.appendChild(lbl);
       list.appendChild(row);
 
-      // Nest any child axes under this value, hidden when the value is unchecked.
+      // Nest any child axes under this value, hidden when unchecked.
       for (const childAxis of (childrenOf[`${axis}:${val}`] || [])) {
         const childGroup = makeFilterGroup(childAxis, DATA.axes[childAxis] || [], "sub-filter-group");
         if (!cb.checked) childGroup.classList.add("hidden");
@@ -630,7 +817,7 @@ function buildColorBySelect() {
       lbl.classList.add("checked");
       colorBy = axis;
       buildFilters();
-      buildChart();
+      buildActiveChart();
     });
 
     container.appendChild(input);
@@ -654,15 +841,12 @@ function buildMetricSelect() {
 
 // ── Init & loading ────────────────────────────────────────────────────────────
 
-// Load one metric's data from the server (cached after first fetch).
-// Updates the chart once the data arrives.
 function loadMetric(name) {
   const expNameEl = document.getElementById("exp-name");
 
-  // Already cached — switch instantly.
   if (METRIC_CACHE[name]) {
     metric = name;
-    buildChart();
+    buildActiveChart();
     return;
   }
 
@@ -677,7 +861,7 @@ function loadMetric(name) {
       metric = name;
       expNameEl.classList.remove("loading");
       expNameEl.textContent = DATA.experiment;
-      buildChart();
+      buildActiveChart();
     })
     .catch(e => {
       expNameEl.classList.remove("loading");
@@ -688,31 +872,40 @@ function loadMetric(name) {
 
 function init(data) {
   DATA         = data;
-  METRIC_CACHE = {};   // clear cached metric data on experiment switch
+  METRIC_CACHE = {};
   colorBy      = Object.keys(DATA.axes)[0];
 
-  // All values visible by default.
   filters = Object.fromEntries(
     Object.entries(DATA.axes).map(([axis, vals]) => [axis, new Set(vals)])
   );
 
-  // Wire up the smoothing slider once (init is called again on experiment switch).
-  if (!init._smoothingWired) {
-    init._smoothingWired = true;
+  // Wire up one-time event listeners.
+  if (!init._wired) {
+    init._wired = true;
+
+    // Smoothing slider (curves-only).
     document.getElementById("smoothing").addEventListener("input", e => {
       smoothAlpha = parseFloat(e.target.value);
       document.getElementById("smooth-val").textContent = smoothAlpha.toFixed(2);
-      buildChart();
+      if (activeTab === "curves") buildCurvesChart();
     });
+
+    // Tab buttons.
+    document.querySelectorAll(".tab").forEach(btn => {
+      btn.addEventListener("click", () => setTab(btn.dataset.tab));
+    });
+
   }
 
-  // Pick initial metric BEFORE building the select so the dropdown reflects it.
   metric = DATA.metricNames.includes(metric) ? metric
     : (DATA.metricNames.find(m => m.includes("loss")) || DATA.metricNames[0]);
 
   buildMetricSelect();
   buildColorBySelect();
   buildFilters();
+
+  // Re-apply tab visibility in case experiment was switched.
+  setTab(activeTab);
 
   loadMetric(metric);
 }
