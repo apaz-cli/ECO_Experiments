@@ -139,7 +139,7 @@ class ECOMuon(Optimizer):
         optim_compute_dtype: torch.dtype = torch.float32,
         eco_enabled: bool = True,
         eco_approach: str = "jacobian",
-        stochastic_rounding: bool = False,
+        stochastic_rounding: bool = True,
         heuristic_log_freq: int = 0,
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
@@ -639,8 +639,7 @@ class ECOMuon(Optimizer):
         freezing the right factor, gives J[H] ≈ H · (MᵀM)^{-1/2}.
         Inverting: Δm = (e/η) · (MᵀM)^{1/2}
 
-        No √(n/m) factor is needed since our NS returns the polar factor
-        directly, without the RMS-to-RMS scaling convention in the blog.
+        The √(n/m) factor is needed to match the blog's RMS-to-RMS scaling convention.
         """
         injection_coeff = (1.0 / lr) * (1.0 - 1.0 / momentum)
         if self._include_weight_decay_in_injection and weight_decay != 0:
@@ -650,7 +649,10 @@ class ECOMuon(Optimizer):
         # If NS(m) ≈ U Vᵀ, then NS(m)ᵀ @ m = V Σ Vᵀ = (mᵀm)^{1/2}.
         # Avoids torch.linalg.eigh which fails for ill-conditioned matrices.
         polar = zeropower_via_newtonschulz5(m, steps=ns_steps)
-        return injection_coeff * (error @ (polar.T @ m))
+
+        # Add √(n/m) scale factor to match blog's RMS-to-RMS convention
+        scale = (m.shape[1] / m.shape[0]) ** 0.5
+        return injection_coeff * scale * (error @ (polar.T @ m))
 
     # ------------------------------------------------------------------
     # Adam for 1D params (biases, norms, embeddings)

@@ -79,7 +79,7 @@ class ECOAdamW(Optimizer):
         optim_state_dtype: torch.dtype = torch.float32,
         optim_compute_dtype: torch.dtype = torch.float32,
         eco_enabled: bool = True,
-        stochastic_rounding: bool = False,
+        stochastic_rounding: bool = True,
         heuristic_log_freq: int = 0,
         quantize_weights: bool = True,
         quant_dtype: str = "bf16",
