@@ -25,7 +25,7 @@ def test_all_configs_run(tmp_path):
         "-g",
         "-j", "4",
         "--training.steps", "5",
-        "--metrics.no-enable-aim",
+        "--metrics.no-enable-exp",
         "--metrics.no-enable-tensorboard",
     ]
 

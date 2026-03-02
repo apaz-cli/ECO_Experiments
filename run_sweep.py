@@ -463,8 +463,8 @@ def _parse_workers(workers_arg):
     return [w.strip() for w in workers_arg.split(",") if w.strip()]
 
 
-def _get_default_aim_server():
-    """Get default aim server address (this machine's hostname + default port)."""
+def _get_default_exp_server():
+    """Get default exp server address (this machine's hostname + default port)."""
     try:
         # Get the first non-loopback IP
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -477,7 +477,7 @@ def _get_default_aim_server():
 
 
 def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
-             worker=None, remote_dir=None, aim_server=None, sync_artifacts=False):
+             worker=None, remote_dir=None, exp_server=None, sync_artifacts=False):
     """Execute one training run. Returns (var, success, elapsed, log_file).
 
     When worker is None, runs locally (existing behavior).
@@ -496,11 +496,11 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
             cmd = build_cmd(base_config, var["overrides"], run_dir, name, extra)
             env = os.environ.copy()
             env.setdefault("NGPU", "1")
-            env["AIM_EXPERIMENT"] = experiment
+            env["EXP_EXPERIMENT"] = experiment
             if tag_str:
-                env["AIM_TAGS"] = tag_str
-            if aim_server:
-                env["AIM_REPO"] = f"aim://{aim_server}"
+                env["EXP_TAGS"] = tag_str
+            if exp_server:
+                env["EXP_SERVER"] = f"http://{exp_server}"
             visible = _visible_devices()
             env["CUDA_VISIBLE_DEVICES"] = str(visible[gpu % len(visible)])
 
@@ -515,12 +515,12 @@ def _run_one(base_config, var, output_dir, experiment, extra, gpu, log,
             env_parts = [
                 f"CUDA_VISIBLE_DEVICES={gpu}",
                 "NGPU=1",
-                f"AIM_EXPERIMENT={shlex.quote(experiment)}",
+                f"EXP_EXPERIMENT={shlex.quote(experiment)}",
             ]
             if tag_str:
-                env_parts.append(f"AIM_TAGS={shlex.quote(tag_str)}")
-            if aim_server:
-                env_parts.append(f"AIM_REPO=aim://{aim_server}")
+                env_parts.append(f"EXP_TAGS={shlex.quote(tag_str)}")
+            if exp_server:
+                env_parts.append(f"EXP_SERVER=http://{exp_server}")
             env_str = " ".join(env_parts)
 
             overrides_str = " ".join(shlex.quote(o) for o in var["overrides"])
@@ -574,7 +574,7 @@ def _singular_desc(combo, options):
 
 
 def run_sweep(variations, base_config, output_dir, experiment, expected, extra,
-              gpu_slots, jobs_per_gpu, remote_dir=None, aim_server=None,
+              gpu_slots, jobs_per_gpu, remote_dir=None, exp_server=None,
               sync_artifacts=False):
     """Execute all variations. Single code path for sequential and parallel.
 
@@ -640,7 +640,7 @@ def run_sweep(variations, base_config, output_dir, experiment, expected, extra,
         try:
             _, ok, elapsed, log = _run_one(
                 base_config, var, output_dir, experiment, extra, gpu, log,
-                worker=worker, remote_dir=remote_dir, aim_server=aim_server,
+                worker=worker, remote_dir=remote_dir, exp_server=exp_server,
                 sync_artifacts=sync_artifacts)
         except Exception:
             ok, elapsed, log = False, time.time() - job_t0, "?"
@@ -820,8 +820,8 @@ def main():
                         help="SSH targets for remote dispatch (comma-separated or @file)")
     parser.add_argument("--remote-dir", default=None,
                         help="Repo path on workers (default: same as local)")
-    parser.add_argument("--aim-server", default=None,
-                        help="Aim tracking server host:port (default: auto-detect)")
+    parser.add_argument("--exp-server", default=None,
+                        help="Exp tracking server host:port (default: auto-detect for remote workers)")
     parser.add_argument("--sync-artifacts", action="store_true",
                         help="Rsync dump_folder back from workers after each job")
     parser.add_argument("--dry-run", action="store_true",
@@ -848,7 +848,7 @@ def main():
 
     # GPU setup: build list of (worker, gpu_id) slots
     remote_dir = args.remote_dir or REPO_ROOT
-    aim_server = args.aim_server
+    exp_server = args.exp_server
 
     if args.workers:
         # Remote mode: discover GPUs on each worker via SSH
@@ -858,8 +858,8 @@ def main():
         if not gpu_slots:
             sweep_print(f"{_RED}Error: no reachable workers with GPUs{_RESET}")
             sys.exit(1)
-        if aim_server is None:
-            aim_server = _get_default_aim_server()
+        if exp_server is None:
+            exp_server = _get_default_exp_server()
         # Respect --gpus as a per-worker limit
         if args.gpus is not None and args.gpus > 0:
             limited = []
@@ -873,7 +873,7 @@ def main():
         worker_counts = Counter(w for w, _ in gpu_slots)
         for w, cnt in sorted(worker_counts.items()):
             sweep_print(f"  {_GREEN}OK{_RESET}    {w}: {cnt} GPUs")
-        sweep_print(f"Aim server: {aim_server}")
+        sweep_print(f"Exp server: {exp_server}")
     else:
         # Local mode: same as before
         visible = _visible_devices()
@@ -953,7 +953,7 @@ def main():
     results, skipped, elapsed = run_sweep(
         variations, base_config, output_dir, experiment, expected, extra,
         gpu_slots, args.jobs_per_gpu, remote_dir=remote_dir,
-        aim_server=aim_server, sync_artifacts=args.sync_artifacts)
+        exp_server=exp_server, sync_artifacts=args.sync_artifacts)
 
     has_failures = print_summary(results, skipped, elapsed)
     sweep_print(f"\nOutput: {output_dir}")

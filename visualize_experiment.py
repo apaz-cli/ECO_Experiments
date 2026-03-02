@@ -2,15 +2,16 @@
 """
 Sweep experiment visualizer.
 
-Loads training metrics from Aim and serves an interactive browser UI
-for exploring loss curves across experimental axes.
+Loads training metrics from JSONL files (or exp_server.py) and serves an
+interactive browser UI for exploring loss curves across experimental axes.
 
 Usage:
-    python visualize_experiment.py                      # newest experiment
-    python visualize_experiment.py debug_smoke_...      # specific experiment
+    python visualize_experiment.py                            # newest experiment
+    python visualize_experiment.py debug_smoke_...           # specific experiment
     python visualize_experiment.py --open-browser
     python visualize_experiment.py --port 43801
-    python visualize_experiment.py --aim-repo aim://host:port  # remote server
+    python visualize_experiment.py --exp-source http://host:53800   # remote server
+    python visualize_experiment.py --exp-source ./outputs/sweeps    # local files
 """
 
 import argparse
@@ -19,19 +20,21 @@ import math
 import os
 import sys
 import threading
+import time
 import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
-import aim as aim_sdk
-from aim.sdk.types import QueryReportMode
+# Default exp source: check EXP_SERVER env var, fall back to local sweeps dir.
+_DEFAULT_EXP_SOURCE = (
+    os.environ.get("EXP_SERVER")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "sweeps")
+)
 
-# Default to the local .aim directory (direct RocksDB reads, no HTTP overhead).
-# Pass --aim-repo aim://host:port to use a remote server instead.
-DEFAULT_AIM_REPO = os.path.dirname(os.path.abspath(__file__))
 
-
-# ── Aim data loading ───────────────────────────────────────────────────────────
+# ── Data loading (dual-mode: HTTP server OR direct file reads) ─────────────────
 
 def _parse_tag_value(s):
     """Convert a tag value string back to a typed Python value."""
@@ -44,50 +47,82 @@ def _parse_tag_value(s):
     return s
 
 
-def list_experiments(repo_url):
-    """Return all Aim experiment names, sorted newest-first."""
-    repo = aim_sdk.Repo(repo_url)
-    latest = {}  # experiment name -> newest created_at seen
-    for r in repo.query_runs('').iter_runs():
-        run = r.run
-        if run.experiment:
-            t = run.created_at
-            if run.experiment not in latest or t > latest[run.experiment]:
-                latest[run.experiment] = t
+def _http_get_json(base_url, path):
+    """GET JSON from an HTTP server. Returns parsed dict."""
+    url = base_url.rstrip("/") + path
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def list_experiments(source):
+    """Return all experiment names, sorted newest-first.
+
+    source: http://host:port  OR  local/path/to/sweeps
+    """
+    if source.startswith("http"):
+        return _http_get_json(source, "/experiments")["experiments"]
+
+    # File mode: walk subdirs, find experiment names from run_meta.json files
+    root = Path(source)
+    latest: dict[str, float] = {}
+    for meta_path in root.glob("*/*/run_meta.json"):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+            exp = meta.get("experiment")
+            if exp:
+                t = meta.get("start_time", 0.0)
+                if exp not in latest or t > latest[exp]:
+                    latest[exp] = t
+        except (OSError, json.JSONDecodeError):
+            pass
     return sorted(latest, key=lambda e: latest[e], reverse=True)
 
 
-def load_experiment_meta(experiment_name, repo_url):
+def load_experiment_meta(experiment_name, source):
     """Return axes, run combos, and metric names — no metric data loaded.
 
-    Fast (a few seconds) because it only reads run metadata and metric names,
-    not the actual time-series values.  Metric data is fetched on demand via
-    load_metric_data().
-
-    Returns {"experiment", "axes", "runs", "metricNames"}.  Each run contains
-    {"name", "hash", "combo"}.  Combos are reconstructed from Aim tags
-    ("key=value" strings set by run_sweep.py).
+    Returns {"experiment", "axes", "runs", "metricNames", "subAxes"}.
+    Each run contains {"name", "hash", "combo"} where "hash" == run_name.
     """
-    repo = aim_sdk.Repo(repo_url)
-    aim_runs = [r.run for r in repo.query_runs('').iter_runs() if r.run.experiment == experiment_name]
+    if source.startswith("http"):
+        path = f"/data.json?name={urllib.parse.quote(experiment_name)}"
+        return _http_get_json(source, path)
 
-    axis_values = {}
-    runs        = []
-    metric_names = set()
+    # File mode: walk source/experiment_name/*/run_meta.json
+    root = Path(source) / experiment_name
+    axis_values: dict = {}
+    runs = []
+    metric_names: set = set()
 
-    for run in aim_runs:
-        combo = {}
-        for tag in run.tags:
-            if '=' in tag:
-                k, v = tag.split('=', 1)
-                combo[k] = _parse_tag_value(v)
+    for meta_path in sorted(root.glob("*/run_meta.json")):
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        run_name = meta.get("run_name") or meta_path.parent.name
+        tags = meta.get("tags", {})
+        combo = {k: _parse_tag_value(str(v)) for k, v in tags.items()}
         for k, v in combo.items():
             axis_values.setdefault(k, set()).add(v)
-        runs.append({"name": run.name, "hash": run.hash, "combo": combo})
-        # Collect metric names only — no .dataframe() calls, so this stays fast.
-        for metric in run.metrics():
-            if not metric.name.startswith('__'):
-                metric_names.add(metric.name)
+
+        # Use run_name as "hash" so JS METRIC_CACHE can key into it
+        runs.append({"name": run_name, "hash": run_name, "combo": combo})
+
+        # Discover metric names from first line of metrics.jsonl (fast)
+        metrics_path = meta_path.parent / "metrics.jsonl"
+        try:
+            with open(metrics_path) as f:
+                first_line = f.readline()
+            if first_line.strip():
+                rec = json.loads(first_line)
+                for k in rec:
+                    if k not in ("step", "t"):
+                        metric_names.add(k)
+        except (OSError, json.JSONDecodeError):
+            pass
 
     def val_sort_key(v):
         if isinstance(v, bool):         return (0, str(v))
@@ -96,19 +131,19 @@ def load_experiment_meta(experiment_name, repo_url):
 
     axes = {k: sorted(vs, key=val_sort_key) for k, vs in axis_values.items()}
 
-    # Detect sub-axes: axes that only appear in runs where some other axis has a specific value.
-    # e.g. "approach" only appears when "optimizer"="muon".
+    # Detect sub-axes
     all_hashes = {r["hash"] for r in runs}
     hashes_with = {ax: {r["hash"] for r in runs if ax in r["combo"]} for ax in axes}
-    sub_axes = {}
+    sub_axes: dict = {}
     for axis in axes:
         if hashes_with[axis] == all_hashes:
-            continue  # universal axis
+            continue
         for parent_axis in axes:
             if parent_axis == axis:
                 continue
             for parent_val in axes[parent_axis]:
-                hashes_with_parent = {r["hash"] for r in runs if r["combo"].get(parent_axis) == parent_val}
+                hashes_with_parent = {r["hash"] for r in runs
+                                      if r["combo"].get(parent_axis) == parent_val}
                 if hashes_with_parent == hashes_with[axis]:
                     sub_axes[axis] = {"parentAxis": parent_axis, "parentValue": parent_val}
                     break
@@ -119,25 +154,44 @@ def load_experiment_meta(experiment_name, repo_url):
             "metricNames": sorted(metric_names), "subAxes": sub_axes}
 
 
-def load_metric_data(experiment_name, metric_name, repo_url):
-    """Load one metric's values for all runs in an experiment (~1–2 s).
+def load_metric_data(experiment_name, metric_name, source):
+    """Load one metric's values for all runs in an experiment.
 
-    Uses Aim's AQL query to filter to a single metric name, skipping all
-    other metrics.  Returns {run_hash: {"steps": [...], "values": [...]}}.
+    Returns {run_name: {"steps": [...], "values": [...]}} — keyed by run_name
+    (same as "hash" in load_experiment_meta, so JS METRIC_CACHE works correctly).
     """
-    repo = aim_sdk.Repo(repo_url)
-    q = repo.query_metrics(
-        f'run.experiment == "{experiment_name}" and metric.name == "{metric_name}"',
-        report_mode=QueryReportMode.DISABLED,
-    )
+    if source.startswith("http"):
+        path = (f"/metric.json?name={urllib.parse.quote(experiment_name)}"
+                f"&metric={urllib.parse.quote(metric_name)}")
+        return _http_get_json(source, path)
+
+    # File mode: walk source/experiment_name/*/metrics.jsonl
+    root = Path(source) / experiment_name
     result = {}
-    for metric in q.iter():
-        df = metric.dataframe()
-        if df.empty:
+
+    for metrics_path in sorted(root.glob("*/metrics.jsonl")):
+        run_name = metrics_path.parent.name
+        steps = []
+        values = []
+        try:
+            with open(metrics_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue  # skip truncated last line on live runs
+                    if metric_name in rec:
+                        steps.append(rec["step"])
+                        v = rec[metric_name]
+                        values.append(None if (isinstance(v, float) and math.isnan(v)) else v)
+        except OSError:
             continue
-        values = [None if (isinstance(v, float) and math.isnan(v)) else v
-                  for v in df['value'].tolist()]
-        result[metric.run.hash] = {"steps": df['step'].tolist(), "values": values}
+        if steps:
+            result[run_name] = {"steps": steps, "values": values}
+
     return result
 
 
@@ -953,11 +1007,14 @@ fetch("/experiments")
 
 # ── HTTP server ────────────────────────────────────────────────────────────────
 
+_META_CACHE_TTL = 30.0  # seconds for live experiment discovery
+
+
 class Handler(BaseHTTPRequestHandler):
-    _meta_cache   = {}  # experiment name -> json bytes (axes + combos + metric names)
-    _metric_cache = {}  # (experiment, metric_name) -> json bytes
-    _default      = None
-    aim_repo      = DEFAULT_AIM_REPO
+    # experiment name → (timestamp, json_bytes); 30s TTL for live runs
+    _meta_cache: dict = {}
+    _default    = None
+    exp_source  = _DEFAULT_EXP_SOURCE
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -967,7 +1024,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", HTML.encode())
 
         elif parsed.path == "/experiments":
-            names = list_experiments(self.aim_repo)
+            names = list_experiments(self.exp_source)
             body  = json.dumps({"experiments": names, "default": self._default}).encode()
             self._send(200, "application/json", body)
 
@@ -975,25 +1032,29 @@ class Handler(BaseHTTPRequestHandler):
             name = qs.get("name", [None])[0]
             if not name:
                 self.send_response(400); self.end_headers(); return
-            if name not in Handler._meta_cache:
-                print(f"Loading metadata: {name}", flush=True)
-                data = load_experiment_meta(name, self.aim_repo)
-                print(f"  {len(data['runs'])} runs, {len(data['axes'])} axes, "
-                      f"{len(data['metricNames'])} metrics", flush=True)
-                Handler._meta_cache[name] = json.dumps(data).encode()
-            self._send(200, "application/json", Handler._meta_cache[name])
+            now = time.time()
+            if name in Handler._meta_cache:
+                ts, cached_body = Handler._meta_cache[name]
+                if now - ts < _META_CACHE_TTL:
+                    self._send(200, "application/json", cached_body)
+                    return
+            print(f"Loading metadata: {name}", flush=True)
+            data = load_experiment_meta(name, self.exp_source)
+            print(f"  {len(data['runs'])} runs, {len(data['axes'])} axes, "
+                  f"{len(data['metricNames'])} metrics", flush=True)
+            body = json.dumps(data).encode()
+            Handler._meta_cache[name] = (now, body)
+            self._send(200, "application/json", body)
 
         elif parsed.path == "/metric.json":
             name   = qs.get("name",   [None])[0]
             metric = qs.get("metric", [None])[0]
             if not name or not metric:
                 self.send_response(400); self.end_headers(); return
-            key = (name, metric)
-            if key not in Handler._metric_cache:
-                print(f"  Loading metric '{metric}' for {name}…", flush=True)
-                data = load_metric_data(name, metric, self.aim_repo)
-                Handler._metric_cache[key] = json.dumps(data).encode()
-            self._send(200, "application/json", Handler._metric_cache[key])
+            # Not cached server-side: JS already caches, and data changes on live runs
+            print(f"  Loading metric '{metric}' for {name}…", flush=True)
+            data = load_metric_data(name, metric, self.exp_source)
+            self._send(200, "application/json", json.dumps(data).encode())
 
         else:
             self.send_response(404)
@@ -1015,34 +1076,39 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("experiment", nargs="?",
-                        help="Aim experiment name to pre-load (default: newest)")
-    parser.add_argument("--aim-repo", default=DEFAULT_AIM_REPO,
-                        help="Path to local .aim repo dir, or aim://host:port for remote "
-                             f"(default: script directory)")
+                        help="Experiment name to pre-load (default: newest)")
+    parser.add_argument("--exp-source", default=None,
+                        help="http://host:port for exp_server.py, or local path to sweeps dir. "
+                             "Defaults to EXP_SERVER env var, then ./outputs/sweeps")
     parser.add_argument("--port", type=int, default=43801)
     parser.add_argument("--open-browser", action="store_true")
     args = parser.parse_args()
 
-    Handler.aim_repo = args.aim_repo
+    exp_source = args.exp_source or _DEFAULT_EXP_SOURCE
+    Handler.exp_source = exp_source
 
     # Find and pre-load the default experiment so the first page load is fast.
-    experiments = list_experiments(args.aim_repo)
+    experiments = list_experiments(exp_source)
     if not experiments:
-        sys.exit(f"No experiments found in Aim repo: {args.aim_repo}")
+        sys.exit(
+            f"No experiments found in: {exp_source}\n"
+            "  Run a training job with --metrics.enable_exp true, or start exp_server.py."
+        )
 
     default_exp = args.experiment or experiments[0]
     if default_exp not in experiments:
         sys.exit(f"Experiment not found: {default_exp}")
 
     print(f"Loading metadata: {default_exp}")
-    data = load_experiment_meta(default_exp, args.aim_repo)
+    data = load_experiment_meta(default_exp, exp_source)
     print(f"  {len(data['runs'])} runs, {len(data['axes'])} axes, "
           f"{len(data['metricNames'])} metrics")
 
-    Handler._meta_cache[default_exp] = json.dumps(data).encode()
+    Handler._meta_cache[default_exp] = (time.time(), json.dumps(data).encode())
     Handler._default = default_exp
 
     url = f"http://localhost:{args.port}"
+    print(f"  Source: {exp_source}")
     print(f"  Serving at {url}  (Ctrl+C to stop)")
 
     if args.open_browser:

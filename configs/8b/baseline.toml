@@ -14,7 +14,7 @@ enable_profiling = false
 [metrics]
 log_freq = 10
 enable_tensorboard = false
-enable_aim = true
+enable_exp = true
 
 [model]
 name = "llama3"
