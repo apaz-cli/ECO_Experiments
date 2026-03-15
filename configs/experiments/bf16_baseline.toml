@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # BF16 baseline with no master weights (mixed precision training).
 # This corresponds to "BF16 w/ MW" baseline in the ECO paper (FP32 master weights with BF16 compute).

@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # Debug config for BF16 baseline (no quantization, no ECO).
 

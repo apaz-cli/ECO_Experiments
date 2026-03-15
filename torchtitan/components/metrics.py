@@ -338,13 +338,13 @@ def _build_metric_logger(
         logger_container.add_logger(tensorboard_logger)
 
     if metrics_config.enable_exp:
-        logger.debug("Creating ExpLogger")
+        logger.debug("Creating MLSweepLogger")
         try:
-            from torchtitan.components.exp_logger import ExpLogger
-            exp_logger = ExpLogger(dump_dir, job_config, tag)
+            from torchtitan.components.exp_logger import MLSweepLogger
+            exp_logger = MLSweepLogger(dump_dir, job_config, tag)
             logger_container.add_logger(exp_logger)
         except Exception as e:
-            logger.error(f"Failed to create ExpLogger: {e}")
+            logger.error(f"Failed to create MLSweepLogger: {e}")
 
     if logger_container.number_of_loggers == 0:
         logger.debug("No loggers enabled, returning an empty LoggerContainer")
@@ -415,7 +415,7 @@ class MetricsProcessor:
     def initialize_logger(self):
         """Initialize the logger after checkpoint loading.
 
-        Must be called after checkpoint loading. ExpLogger resumes by appending
+        Must be called after checkpoint loading. MLSweepLogger resumes by appending
         to the existing metrics.jsonl, so no run hash is needed.
         """
         self.logger = _build_metric_logger(

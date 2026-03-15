@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # LR and batch size sweep for finding a good base config.
 #
 # Dimensions: treatment × speed(LBS, AC)
@@ -27,7 +27,7 @@
 from _common import SPEED_OPTIONS
 from _treatments import PAPER_TREATMENTS, _flags
 
-BASE_CONFIG = "configs/experiments/master.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/master.toml"]
 
 OPTIONS = {
     **SPEED_OPTIONS,

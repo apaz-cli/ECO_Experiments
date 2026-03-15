@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # Section 5: Muon ECO Approach Comparison
 # Dimensions: fp8_eco_sr treatment × 4 ECO approaches (pre_ns, naive_sgdm, frobenius, jacobian) × speed(LBS, AC)
 # Tests all four ECO injection strategies for Muon optimizer with FP8+SR base configuration.
@@ -12,7 +12,7 @@
 from _common import SPEED_OPTIONS
 from _treatments import TREATMENTS, _flags
 
-BASE_CONFIG = "configs/experiments/muon.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/muon.toml"]
 EXTRA_FLAGS = _flags(*TREATMENTS["fp8_eco_sr"])
 
 APPROACHES = ["pre_ns", "naive_sgdm", "frobenius", "jacobian"]

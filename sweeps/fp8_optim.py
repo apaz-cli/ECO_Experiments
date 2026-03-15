@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # FP8 weights + BF16 optimizer states sweep.
 # Tests whether BF16 optimizer states compose with FP8+ECO (the main ECO setting).
 #
@@ -16,7 +16,7 @@
 from _common import SPEED_OPTIONS
 from _treatments import _flags
 
-BASE_CONFIG = "configs/experiments/master.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/master.toml"]
 
 # (eco_enabled, quant_dtype, master_weights_dtype, optim_state_dtype, stochastic_rounding, activation_quant)
 SELECTED = {

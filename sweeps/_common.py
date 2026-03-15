@@ -1,8 +1,9 @@
 # Reusable option dicts for speed/memory settings.
 #
 # These are "singular + monotonic" dimensions: you want to find one
-# working value (usually the fastest) and use it for every run.
-# Values are listed best-first (highest throughput, most likely to fail).
+# working value (usually the most conservative) and use it for every run.
+# Values are listed most-aggressive-first; monotonic: "decreasing" reverses
+# them internally so the scheduler tries conservative options first.
 #
 # Usage in sweep files:
 #   from _common import SPEED_OPTIONS
@@ -18,13 +19,11 @@ LOCAL_BATCH_SIZE = {
     "values": [64, 32, 16, 8, 4, 2, 1],
     "flags": "--training.local_batch_size",
     "name": None,
-    "monotonic": "decreasing",
     "singular": True,
 }
 
 COMPILE = {
-    "values": [True, False],
-    "flags": {True: ["--compile.enable"], False: ["--compile.no-enable"]},
+    "flags": {"true": ["--compile.enable"], "false": ["--compile.no-enable"]},
     "name": None,
     "singular": True,
 }

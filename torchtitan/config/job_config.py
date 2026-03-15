@@ -100,7 +100,8 @@ class Metrics:
 
     enable_exp: bool = False
     """Whether to log metrics to the file-based experiment logger (exp_logger.py).
-    Set EXP_SERVER=http://host:port to also stream to exp_server.py."""
+    Set EXP_SERVER=http://host:port to also stream to exp_server.py.
+    Set MLSWEEP_TOKEN=secret if exp_server was started with --token."""
 
 
 @dataclass

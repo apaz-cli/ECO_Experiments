@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # BF16 vs BF16+ECO comparison sweep
 # Dimensions: bf16 vs bf16_eco × speed(LBS, AC)
 # Speed options are singular — resolved in the first few runs, then locked in.
@@ -17,7 +17,7 @@
 from _common import SPEED_OPTIONS
 from _treatments import TREATMENTS, _flags
 
-BASE_CONFIG = "configs/experiments/master.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/master.toml"]
 
 # Select only the two BF16 treatments
 SELECTED_TREATMENTS = {

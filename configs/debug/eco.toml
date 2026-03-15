@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # Debug config for ECO validation. Quick smoke test on 1 GPU.
 

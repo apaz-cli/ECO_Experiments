@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # Weight-decay factor injection sweep.
 # Compare ECO injection with/without the (1 - ηλ) weight-decay factor.
 # Based on leloykun's derivation: https://leloykun.github.io/ponder/eco/
@@ -21,20 +21,18 @@
 # Example command:
 #   python run_sweep.py --sweep weight_decay_injection -- --training.steps 100
 
-BASE_CONFIG = "configs/experiments/muon.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/muon.toml"]
 
 def EXCLUDE(combo):
     """Skip weight-decay injection when weight_decay is 0 (factor is always 1)."""
-    return combo["weight_decay"] == 0.0 and combo["include_weight_decay_in_injection"] is True
+    return combo["weight_decay"] == 0.0 and combo["include_weight_decay_in_injection"] == "true"
 
 OPTIONS = {
     ".approach": {
-        "values": ["jacobian"],
         "flags": {"jacobian": ["--eco.approach", "jacobian"]},
         "name": "app",
     },
     ".weight_decay": {
-        "values": [0.0, 0.1],
         "flags": {
             0.0: ["--optimizer.muon.weight_decay", "0.0"],
             0.1: ["--optimizer.muon.weight_decay", "0.1"],
@@ -42,10 +40,9 @@ OPTIONS = {
         "name": "wd",
     },
     ".include_weight_decay_in_injection": {
-        "values": [False, True],
         "flags": {
-            False: ["--eco.no-include_weight_decay_in_injection"],
-            True: ["--eco.include_weight_decay_in_injection"],
+            "false": ["--eco.no-include_weight_decay_in_injection"],
+            "true": ["--eco.include_weight_decay_in_injection"],
         },
         "name": "wdinj",
     },

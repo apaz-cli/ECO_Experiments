@@ -1,4 +1,4 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # Common treatment definitions for the ECO paper experiments.
 #
 # Treatments (paper §4.1):

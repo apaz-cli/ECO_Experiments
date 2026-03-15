@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # Muon ECO experiments configuration.
 # Tests ECO approaches for the Muon optimizer (Newton-Schulz momentum).

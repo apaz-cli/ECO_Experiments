@@ -205,7 +205,7 @@ chmod +x sweeps/beta.py
 ./sweeps/beta.py --base_config configs/experiments/master.toml --gpus 2
 ```
 
-The shebang line (`#!/tmp/eco/run_sweep.py`) causes the sweep file to be interpreted by `run_sweep.py`. The script detects this mode, loads the `OPTIONS` from the same file, and processes the remaining command‑line arguments.
+The shebang line (`#!/usr/bin/env mlsweep_run`) causes the sweep file to be interpreted by `run_sweep.py`. The script detects this mode, loads the `OPTIONS` from the same file, and processes the remaining command‑line arguments.
 
 ## Command‑Line Options
 
@@ -242,7 +242,7 @@ Adam and Muon share the `treatment` dimension, but `approach` (ECO injection str
 only applies to Muon. Using a branch dim gives 55 runs instead of 88 with `EXCLUDE`.
 
 ```python
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 from _treatments import TREATMENTS, _flags
 
 BASE_CONFIG = "configs/debug/baseline.toml"
@@ -280,7 +280,7 @@ Produces names like:
 ### Local Batch Size Tuning Sweep
 
 ```python
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 
 BASE_CONFIG = "configs/experiments/master.toml"
 
@@ -310,7 +310,7 @@ With 7 batch sizes and 3 learning rates, this generates 21 total variations, but
 - **`Error: no base config specified`** – Provide `--base_config` or define `BASE_CONFIG` in the sweep file.
 - **`Dimension key '...' must start with '.'`** – All keys in `OPTIONS` (and in branch dim specs) must begin with `.`. Metadata keys inside a dim spec (name, flags, values, singular, monotonic) do not.
 - **Monotonic skipping not working in parallel** – This is expected; monotonic skipping only works in sequential mode (`-g 1 -j 1`).
-- **Shebang mode fails with "No such file or directory"** – Ensure `/tmp/eco/run_sweep.py` exists (run `./start_aim_server.sh` once to create the wrapper).
+- **Shebang mode fails with "No such file or directory"** – Ensure `/tmp/mlsweep_shims/run_sweep.py` exists (run `./start_aim_server.sh` once to create the wrapper).
 
 ## See Also
 

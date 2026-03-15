@@ -1,7 +1,7 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 from _treatments import TREATMENTS, _flags
 
-BASE_CONFIG = "configs/debug/baseline.toml"
+COMMAND = ["bash", "run_config.sh", "configs/debug/baseline.toml"]
 
 WD = "0.1"
 MUON_LR = "0.02"
@@ -25,8 +25,7 @@ MUON_APPROACHES = ["pre_ns", "naive_sgdm", "frobenius", "jacobian"]
 
 OPTIONS = {
     ".eco": {
-        "values": [True, False],
-        "flags": {True: ["--eco.enabled"], False: ["--eco.no-enabled"]},
+        "flags": {"true": ["--eco.enabled"], "false": ["--eco.no-enabled"]},
         "name": "eco",
     },
     ".quant_dtype": {
@@ -50,8 +49,7 @@ OPTIONS = {
         "name": "ad",
     },
     ".stochastic_rounding": {
-        "values": [True, False],
-        "flags": {True: ["--eco.stochastic-rounding"], False: ["--eco.no-stochastic-rounding"]},
+        "flags": {"true": ["--eco.stochastic-rounding"], "false": ["--eco.no-stochastic-rounding"]},
         "name": "sr",
     },
     ".optimizer": {
@@ -62,7 +60,6 @@ OPTIONS = {
         ".muon": {
             "flags": MUON_BASE_FLAGS,
             ".approach": {
-                "values": MUON_APPROACHES,
                 "flags": {a: ["--eco.approach", a] for a in MUON_APPROACHES},
                 "name": "a",
             },

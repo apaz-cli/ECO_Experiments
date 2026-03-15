@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # Master config for ECO scaling-law experiments.
 # This configuration is tuned for a 30M parameter model. To use with other model sizes,

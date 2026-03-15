@@ -10,6 +10,9 @@ authors = [
 ]
 keywords = ["pytorch", "training", "llm"]
 dependencies = [
+    # Sweep engine and experiment tracking
+    "mlsweep @ file:///home/aaron/git/mlsweep",
+
     # Stateful Dataloader
     "torchdata>=0.8.0",
 
@@ -45,7 +48,6 @@ dev = [
 ]
 eco = [
     "torchao",
-    "aim",
     "tqdm",
     "pytest",
 ]

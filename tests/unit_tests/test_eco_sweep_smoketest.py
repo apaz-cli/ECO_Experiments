@@ -1,8 +1,8 @@
 """
-Smoke test: runs all 16 ECO config combinations (2x2x2x2) on the debug model
+Smoke test: runs all 16 ECO config combinations on the debug model
 for 5 steps each in parallel, asserting none crash.
 
-This is a functional test that invokes run_sweep.py → torchrun, so it
+This is a functional test that invokes mlsweep_run → torchrun, so it
 requires a GPU and the full training stack. Run with:
 
     pytest tests/unit_tests/test_eco_sweep_smoketest.py -v
@@ -18,12 +18,14 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def test_all_configs_run(tmp_path):
+    mlsweep_run = os.path.join(os.path.dirname(sys.executable), "mlsweep_run")
     cmd = [
-        sys.executable, os.path.join(REPO_ROOT, "run_sweep.py"),
-        "--sweep", "debug_smoke",
+        mlsweep_run,
+        os.path.join(REPO_ROOT, "sweeps", "debug_smoke.py"),
         "--output_dir", str(tmp_path),
         "-g",
-        "-j", "4",
+        "-j", "60",
+        "--",
         "--training.steps", "5",
         "--metrics.no-enable-exp",
         "--metrics.no-enable-tensorboard",
@@ -32,7 +34,7 @@ def test_all_configs_run(tmp_path):
     result = subprocess.run(
         cmd, cwd=REPO_ROOT,
         capture_output=True, text=True,
-        timeout=300,
+        timeout=1800,
     )
 
     # Print output for visibility in pytest -v

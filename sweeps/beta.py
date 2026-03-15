@@ -1,11 +1,11 @@
-#!/tmp/eco/run_sweep.py
+#!/usr/bin/env mlsweep_run
 # Section 4: Adam β₁ sensitivity analysis
 # The ECO injection coefficient (1 − 1/β₁) depends directly on β₁.
 # β₂ is fixed at 0.98 (paper's choice, line 305).
 # Compare fp8_eco_sr against bf16 baseline at each β₁ to see if ECO shifts the optimum.
 from _treatments import TREATMENTS, _flags
 
-BASE_CONFIG = "configs/experiments/master.toml"
+COMMAND = ["bash", "run_config.sh", "configs/experiments/master.toml"]
 
 SELECTED = {
     "bf16": TREATMENTS["bf16"],

@@ -1,4 +1,4 @@
-#!/tmp/eco/run_config.sh
+#!/tmp/mlsweep_shims/run_config.sh
 
 # Llama 3 8B with ECO (FP8 quantization + error-compensating optimizer).
 # Paper hyperparameters: AdamW, beta1=0.9, beta2=0.98, eps=1e-9, wd=0.1
